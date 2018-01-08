@@ -1,0 +1,125 @@
+---
+title: "source"
+author: "Simon Schulte"
+date: "20 März 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# parameter setting
+```{r}
+colors <- brewer.pal(12, "Set3")[-2] # colors for plots
+
+n_ind <- 35 # number of industries
+n_countries <- 41 # number of countries (40 + 1 RoW)
+years_obs <- 1995:2011 # years for which IO table exists
+n_years <- length(years_obs)
+years_new <- c(seq(2015, 2045, 10))
+years <- c(years_obs, years_new)
+n_sectors <- 4 # final demand sectors (household, non-gov, gov, capital formation)
+exchange_rates <- c(1.36626,	1.30024	,1.12945	,1.11308	,1.06580	,0.92360	,0.89560	,0.94560	,1.13120,	1.24390,	1.24410	,1.25560,	1.37050	,1.47080,	1.39480,	1.32570,	1.39200) # 1 € = ...$US (according to WIOD)
+path2plots <- "/home/simon/Dokumente/ResearchMethodsIndustrialEcology/myproject/analyse_results/figures/"
+
+print(xtable(as.matrix(data.frame("Year" = years_obs, "Exchange rate" = exchange_rates)), digits = c(0,0,2)), include.rownames = F)
+``` 
+
+# functions
+```{r functions}
+# requirements for all functions: 
+# argument 'mat' needs to be a matrix with years as rownames and sectors/countries(/...) as colnames
+
+scaleTo100 <- function(mat, baseyear){
+  mat100 <- t(apply(as.matrix(mat), 1, function(x){100 * (x/as.matrix(mat)[which(rownames(mat) == as.character(baseyear)),])}))
+  return(mat100)
+}
+
+aggregate_matrix <- function(mat, 
+                             n, # number of sectors/countries/etc. that stay
+                             fun = mean # determines how first n sectors/countries/etc are determined
+                             ){
+  # aggregates a matrix
+  # first n sectors/countries/etc. stay, all others are subsumed into one sector "Other"
+  new_mat <- matrix(0, ncol = n+1, nrow = nrow(mat))
+  names_agg <- names(sort(apply(mat, 2, fun), decreasing = T))[1:n]
+  index_vec <- vector(mode = "numeric", length = n)
+  for(i in 1:n){
+    new_mat[,i] <- mat[,which(colnames(mat) == names_agg[i])]
+    index_vec[i] <- which(colnames(mat) == names_agg[i])
+  }
+  new_mat[,n+1] <- rowSums(mat[,-index_vec] ) 
+  rownames(new_mat) <- rownames(mat)
+  colnames(new_mat) <- c(colnames(mat)[index_vec], "Other")
+  return(new_mat)
+}
+
+getMatrix4Country <- function(mat, country.name, time.vec){
+  #function to get detailed matrix for ONE country
+  mat_country <- as.data.frame(matrix(nrow = length(time.vec), ncol = nrow(mat[[1]])))
+  colnames(mat_country) <- rownames(mat[[1]])
+  rownames(mat_country) <- time.vec
+  for(i in 1:length(time.vec)){
+    mat_country[i,] <- mat[[i]][,which(colnames(mat[[1]]) == as.character(country.name))]
+  }
+  return(mat_country)
+}
+
+
+
+cumulate_matrix <- function(mat, order = T){
+  # colwise cumulate values of a matrix (required for stacked_area_plot)
+  if(order == T){
+    if(!is.null(which(colnames(mat) == "Other"))){
+      new_mat <- mat[,-which(colnames(mat) == "Other")]
+      new_mat <- new_mat[,order(colMeans(new_mat))]
+      new_mat <- cbind("Other" = mat[,which(colnames(mat) == "Other")], new_mat)
+    }
+    new_mat <- mat[,order(colMeans(mat))]
+  }else{new_mat <- mat}
+  for(i in 2:ncol(new_mat)){
+    new_mat[,i] <- new_mat[,i-1] + new_mat[,i]
+  }
+  return(new_mat)
+}
+
+stacked_area_plot <-function(mat, # matrix with years as rownames and sectors/countries(/...) as colnames --> output of function cumulate_matrix with order = T
+                             colorvec, # vector with colorcodes (length(colorvec) = ncol(mat))
+                             xaxt.steps, # steps for drawing tick marks at x-axis
+                             yaxt.steps, # steps for drawing tick marks at x-axis
+                             legend = T, # draw a legend??
+                             legend.pos = "topleft", # coordinates (c(x,y) or position (e.g."bottomleft") of the legend, see ?legend)
+                             ... # additional arguments for plot(), see ?plot
+                             ){
+  years <- rownames(mat)
+  xx <- c(years, rev(years)) # create x-values of the polygons (same for all)
+  yy_mat <- matrix(0, nrow = ncol(mat), ncol = 2 * nrow(mat)) # matrix to store y-values of each polygon
+  for(i in 1:ncol(mat)){
+    # fill y-values
+    yy_mat[i,] <- c(rep(0, nrow(mat)), rev(mat[,ncol(mat) + 1 - i]))
+  }
+  plot(x=years, y=mat[,ncol(mat)], col=colorvec[1], type='l', ylim=1.1*c(0, max(mat[,ncol(mat)])), 
+       bty= "n", xaxt = "n", yaxt = "n", ...) 
+  axis(1, at = seq(min(years), max(years), xaxt.steps), lwd.ticks = 0.5, lwd = 0.5)
+  axis(2, at = seq(0, signif(max(mat[,ncol(mat)]), 2), yaxt.steps), las = 2, lwd.ticks = 0.5, lwd = 0.5)
+  for(i in 1:ncol(mat)){
+    polygon(xx, yy_mat[i,], col=colorvec[i], border=colorvec[i])
+  }
+  # drawing a legend if required
+  if(legend == T){
+    if(is.character(legend.pos)) legend(legend.pos, legend = rev(colnames(mat)), 
+                         fill = colorvec,
+                         bty = "n", border = colorvec)
+    else legend(legend.pos[1], legend.pos[2], legend = rev(colnames(mat)), 
+                         fill = colorvec,
+                         bty = "n", border = colorvec)
+  } 
+}
+
+
+```
+
+
+

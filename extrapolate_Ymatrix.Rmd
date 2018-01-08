@@ -1,0 +1,439 @@
+---
+title: "extrapolate_Ymatrix"
+author: "Simon Schulte"
+date: "22 November 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+# load packages
+```{r}
+library(xlsx)
+library(data.table)
+require(devtools)
+install_github('simonpedrobolivar/masterthesis/MRIOtools')
+require(MRIOtools)
+library(parallel)
+library(RColorBrewer)
+```
+
+
+# setting the constant parameters
+```{r parameters}
+colors <- brewer.pal(12, "Set3") # colors for plots
+n_ind <- 163 # number of industries
+n_countries <- 49 # number of countries (40 + 1 RoW)
+years_obs <- 1995:2011 # years for which IO table exists
+n_years_obs <- length(years_obs)
+years_est <- c(2020, 2030)
+years <- c(years_obs, years_est)
+n_FDcat <- 4 # final demand sectors (household, non-gov, gov, capital formation)
+n_GHGs <- 4 # number of relevant GHGs (CO2, CH4, N2O, SF6)
+FD_names <- c("Households", "NPISH", "Government", "GFCF") #("Households","NPISH", "Government", "GFCF", "Changes in inventories", "Changes in valuables"  ,"Exports: Total (fob)")  
+path4plots <- "/home/simon/Dokumente/Master/master_thesis/figures/"
+path2data <- "~/Dokumente/Master/master_thesis/data/EB3/"
+```
+
+
+# load data
+```{r}
+setwd(path2data)
+files = list.files(pattern="Y_")[1:length(years_obs)]
+Y_obs_list <- lapply(files, function(x) fread(x, sep = "\t", header = T, select = c(38:41), skip = 1)[-1,]) # read the files. List of data.tables. Each element of the list represents ONE year.
+names(Y_obs_list) <- years_obs
+setwd("~/Dokumente/Master/master_thesis/Results/MRIO_Results/Timeseries 1995 – 2015_2017_11_20__19_16_11")
+files = list.files(pattern="Midpoint footprints, Germany")
+Y_names <- fread(files[1], sep = "\t", header = T, select = c(1,2), skip = 0)
+#Y_obs_list[[1]][1:5,] # check data
+
+setwd("~/Dokumente/Master/master_thesis/scripts/R/mid-results/")
+#GDP_DEU <- read.table("GDP.txt", header = T)[-(1:4),]
+GDP_DEU_current <- read.csv("BIP_current.csv", header = T) # gdp from statistischen bundesamt
+NetExports <- read.csv("nettoexports.csv", dec = ",")[-(1:4),]
+GDP_DEU_without_netExport <- rev(GDP_DEU$Value - NetExports$Value)
+```
+inflat_DEU <- read.table("inflation_raw.txt", header = T)[-c(1:4, (22:24)),1:2]
+colnames(inflat_DEU) <- c("Year", "Inflationrate")
+inflat_DEU$Inflationrate <- inflat_DEU$Inflationrate/100 # from percent to deciaml
+inflat_DEU <- inflat_DEU[order(inflat_DEU$Year),]
+
+inflat_cumul <- vector(length = n_years_obs)
+inflat_cumul[1] <- inflat_DEU[1,2]
+for(i in 2:(n_years_obs)) inflat_cumul[i] <- inflat_DEU[i,2] + inflat_cumul[i-1]
+
+
+# check data
+## get data into right form
+```{r}
+Y_obs_list2check <- lapply(Y_obs_list, function(x) cbind(Y_names, x))
+Y_obs_dt <- rbindlist(Y_obs_list2check, idcol = T)
+setnames(Y_obs_dt, c(".id", "Final consumption expenditure by households", "Final consumption expenditure by non-profit organisations serving households (NPISH)", "Final consumption expenditure by government", "Gross fixed capital formation"), c("Year", "Households", "NPISH", "Government", "GFCF"))
+
+Y_obs_byCountry <- Y_obs_dt[,sum(Households, NPISH, Government, GFCF), by = .(Year, Country)]
+Y_obs_byIndustry <- Y_obs_dt[,sum(Households, NPISH, Government, GFCF), by = .(Year, Industry)]
+
+#fd_names <- names(Y_dt)[-c(1,2,3)]
+Y_obs_byFDcat_Households <- Y_obs_dt[,sum(Households), by = .(Year)]
+Y_obs_byFDcat_NPISH <- Y_obs_dt[,sum(NPISH), by = .(Year)]
+Y_obs_byFDcat_Government <- Y_obs_dt[,sum(Government), by = .(Year)]
+Y_obs_byFDcat_GFCF <- Y_obs_dt[,sum(GFCF), by = .(Year)]
+#Y_byFDcat_Exports <- Y_obs_dt[,sum(`Exports: Total (fob)`), by = .(Year)]
+
+Y_obs_byFDcat <- merge(merge(Y_obs_byFDcat_Households, Y_obs_byFDcat_NPISH, by = "Year"), merge(Y_obs_byFDcat_Government, Y_obs_byFDcat_GFCF, by = "Year"), by = "Year")
+names(Y_obs_byFDcat) <- colnames
+Y_obs_byFDcat_mat <- apply(as.matrix(Y_obs_byFDcat), c(1,2), as.numeric)
+rownames(Y_obs_byFDcat_mat) <- Y_obs_byFDcat_mat[,1]
+Y_obs_byFDcat_mat <- Y_obs_byFDcat_mat[,-1]
+colnames(Y_obs_byFDcat_mat) <- FD_names
+
+# total gdp-growth
+Y_obs_total <- apply(Y_obs_byFDcat_mat, 1, sum)
+new <- c(Y_obs_total[-1], 0)
+delta_Y_obs <- ((new/Y_obs_total)-1)[1:(n_years_obs-1)] # GDP change compared to previouse year
+```
+
+## plot
+```{r}
+pdf(paste0(path4plots, "Y_obs_byFDcat_wGDP.pdf"))
+stacked_area_plot(Y_obs_byFDcat_mat/1E3, colorvec = colors, yaxt.steps = 500, xaxt.steps = 2, legend.pos = "topleft", ylab = "Final Demand GER [Billion EUR]", ylim.adjust = 150, legend.ncol = 1)
+#lines(GDP_DEU)
+lines(years_obs, GDP_DEU_without_netExport)
+legend(x = 2000, y = 2800, legend = "GDP w/o net exports (source: World Bank)", lty = 1, lwd = 2, box.col = "white", bg = "white")
+dev.off()
+```
+
+# testing some stuff
+```{r} 
+require(mgcv)
+# get timeseries for tests
+Y_names <- cbind(Y_names, Index = 1:7987)
+Y_names[Country == "Germany" & Industry == "Production of electricity by wind"]$Index # 915 for wind
+ts <- as.numeric(sapply(Y_obs_list, "[", 911 , 1))
+plot(years_obs, ts, type = "l")
+
+# testing CV
+par(mfrow = c(3,4), mar = c(2,2,2,2))
+
+preds_vec <- vector(length = 11)
+preds_mat <- matrix(nrow = 11, ncol = n_years_obs) # rows: year where data is splitted, cols: forecasting year
+names(preds_vec) <- rownames(preds_mat) <- 2000:2010 # split data in year 2000 (..) means 2000 (.,.) is the LAST year included in the training data set, 2001 the FIRST of the test data 
+colnames(preds_mat) <- years_obs 
+for(i in 1:11){
+  test <- ts[1:(5 + i)]
+  years1 <- years_obs[1:(5 + i)]
+  fm1 <- glm(test ~ years1 + I(years1^2) + I(years1^3))
+  preds <- predict(fm1, newdata = data.frame("years1" = years_obs[(6+i):n_years_obs])) # predict one year into the future
+  preds_vec[i] <- preds[1]
+  preds_mat[i,(6+i):n_years_obs] <- preds 
+ # max <- 1.1 * max(preds1, ts[6+i+1])
+#  r2 <- cor(preds1, ts[6+i+1])^2
+#  plot(x = preds1, y = ts[6+i+1], xlim = c(0, max), ylim = c(0, max), xlab = "predicted", ylab = "observed", main = paste("r2 =",round(r2,2)))
+#  lines(c(0, max), c(0, max))
+}
+# residuals: 
+res_mat <- preds_mat
+for(i in 7:n_years_obs) res_mat[,i] <- abs(preds_mat[,i] - ts[i])
+
+
+#plot res vs. obs
+## 1. by "year to the future", one year to future, two years etc.
+max <- max(c(ts, preds_mat), na.rm = T)
+min <- min(c(ts, preds_mat), na.rm = T)
+par(mfrow = c(3,4))
+for(i in 1:11){
+  preds <- diag(preds_mat[,(6+i):n_years_obs])
+  if(is.matrix(preds)) preds <- preds[1,1]
+  max <- max(c(preds, ts[(6+i):n_years_obs]))
+  min <- min(c(preds, ts[(6+i):n_years_obs]))
+  plot(preds, ts[(6+i):n_years_obs], main = paste(i, " year(s) ahead"), ylim = c(min, max), xlim = c(min, max))
+  lines(c(0, max), c(0, max))
+  legend("topleft", legend = paste("r2 = ", round(cor(ts[(6+i):n_years_obs], preds) ^2, 2)), bty = "n", cex = 0.8)
+  #boxplot(preds - ts[(6+i):n_years_obs], main = paste(i, " year(s) ahead"))
+  #abline(h = 0)
+}
+
+
+## 2. by year where data were splitted
+par(mfrow = c(3,4))
+for(i in 1:11){
+  preds <- preds_mat[i,]
+  max <- max(c(preds, ts), na.rm = T)
+  min <- min(c(preds, ts), na.rm = T)
+  plot(preds, ts, main = paste("split in year", i+1994), ylim = c(min, max), xlim = c(min, max))
+  lines(c(0, max), c(0, max))
+  legend("topleft", legend = paste("r2 = ", round(cor(ts, preds, use = "na.or") ^2, 2)), bty = "n", cex = 0.8) # na treatement ????
+}
+
+par(oma = c(2,2,2,2))
+plot(preds_mat[1,7], ts[7], ylim = c(min, max), xlim = c(min, max))
+for(i in 1:10){
+  points(preds_mat[,7+i], rep(ts[7+i], nrow(preds_mat)), col = i+1)
+}
+lines(c(0, max), c(0, max))
+
+plot(x = preds_vec, y = ts[7:17], xlim = c(0, 500), ylim = c(0, 500))
+lines(c(0, 500), c(0, 500))
+cor(ts[7:17], preds_vec) ^2
+mtext(text = paste("r2 =", cor(ts[7:17], preds_vec) ^2))
+
+
+
+
+fm <- glm(ts ~ years_obs + I(years_obs^2) + I(years_obs^3))
+summary(fm)
+preds <- predict(fm, se.fit = F)
+cor(ts, preds$fit) ^2
+par(mfrow = c(1,1))
+plot(ts, preds, xlim = c(0, 500), ylim = c(0, 500))
+lines(c(0, 500), c(0, 500))
+plot(years_obs, ts, type = "l")
+lines(years_obs, preds, col = "red")
+lines(years_obs, preds$se, col = "red")
+lines(years_obs, preds$fit, col = "red")
+plot(fm)
+
+## test residuals
+res <- preds - ts
+plot(years_obs, res, type = "b")
+abline(h = 0, lty  = 2)
+
+acf(resid(fm), main="acf(resid(fm))")
+acf(resid(fm3p1q1$lme), main="acf(resid(fm3p1q1))")
+
+
+
+# testing gam
+fm3p1q1 <- gamm(ts ~ s(years_obs, bs = "cr"),
+          correlation = corARMA(form = ~ 1|years_obs, p = 1, q = 1))
+preds <- predict(fm3p1q1$gam, newdata = data.frame("years_obs" = years), se.fit = T)
+plot(years_obs, ts, ylim = c(0, 1000), xlim = c(1995, 2030), type = "l", lwd= 2, 
+     ylab = "Final Demand [MEUR]", 
+     xlab = "Years", main = "Final Demand by German households \n for German Wind Electricity [MEUR]")
+lines(years, preds$fit,type= "l", col = "red")
+lines(years, preds$fit + 2 * preds$se.fit,type= "l", lty = 2, col = "red")
+lines(years, preds$fit - 2 * preds$se.fit,type= "l", lty = 2, col = "red")
+abline(v = c(2020, 2030), lty = 2, col = "grey30")
+abline(h = c(preds$fit[18], preds$fit[19]), lty = 2, col = "grey30")
+points(c(2020, 2030), c(preds$fit[18], preds$fit[19]), col = "darkgreen", lwd = 3)
+
+# test LASSO (glmnet)
+require(glmnet)
+fm_glmnet <- glmnet(ts, years_obs)
+```
+
+
+
+
+
+# extrapolate Y
+```{r}
+Y_est_list <- extrapolate_matrix(Y_obs_list, years.est = years_est, years.obs = years_obs, parallel = T, n.cores = 3)
+Y_list <- c(Y_obs_list, Y_est_list)
+#Y_list <- Y_obs_list
+names(Y_list) <- years
+```
+
+# write new Y matrices
+```{r}
+for(i in 1:length(years_est)){
+  write.table(Y_est_list[[i]], paste0(path2data, "Scenario_1/Y_", years_est[i], ".txt"), row.names = F, col.names = F, sep = "\t") 
+}
+```
+
+# analyse resulting Y matrices
+```{r}
+Y_list <- lapply(Y_list, function(x) cbind(Y_names, x))
+Y_dt <- rbindlist(Y_list, idcol = T)
+setnames(Y_dt, c(".id", "Final consumption expenditure by households", "Final consumption expenditure by non-profit organisations serving households (NPISH)", "Final consumption expenditure by government", "Gross fixed capital formation"), c("Year", "Households", "NPISH", "Government", "GFCF"))
+
+Y_byCountry <- Y_dt[,sum(Households, NPISH, Government, GFCF), by = .(Year, Country)]
+Y_byIndustry <- Y_dt[,sum(Households, NPISH, Government, GFCF), by = .(Year, Industry)]
+
+#fd_names <- names(Y_dt)[-c(1,2,3)]
+Y_byFDcat_Households <- Y_dt[,sum(Households), by = .(Year)]
+Y_byFDcat_NPISH <- Y_dt[,sum(NPISH), by = .(Year)]
+Y_byFDcat_Government <- Y_dt[,sum(Government), by = .(Year)]
+Y_byFDcat_GFCF <- Y_dt[,sum(GFCF), by = .(Year)]
+#Y_byFDcat_Exports <- Y_dt[,sum(`Exports: Total (fob)`), by = .(Year)]
+
+Y_byFDcat <- merge(merge(Y_byFDcat_Households, Y_byFDcat_NPISH, by = "Year"), merge(Y_byFDcat_Government, Y_byFDcat_GFCF, by = "Year"), by = "Year")
+names(Y_byFDcat) <- colnames
+Y_byFDcat_mat <- apply(as.matrix(Y_byFDcat), c(1,2), as.numeric)
+rownames(Y_byFDcat_mat) <- Y_byFDcat_mat[,1]
+Y_byFDcat_mat <- Y_byFDcat_mat[,-1]
+```
+
+## plots
+```{r}
+pdf(paste0(path4plots, "Y_byFDcat_wGDP.pdf"))
+stacked_area_plot(Y_byFDcat_mat/1E3, agg = F, agg.level = 7, colorvec = colors, yaxt.steps = 500, xaxt.steps = 5, legend.pos = "topleft", ylab = "Final Demand GER [Billion EUR]", ylim.adjust = 150, legend.ncol = 1)
+lines(GDP_DEU)
+lines(years_obs, GDP_DEU_without_netExport)
+legend(x = 2000, y = 3200, legend = "GDP (source: World Bank)", lty = 1, lwd = 2, box.col = "white", bg = "white")
+dev.off()
+```
+
+
+
+# validate forecasts
+
+## unscaled
+```{r}
+system.time(
+Y_valid_sc_list <- validate_forecast(Y_obs_list, year.split = 2000, years.obs = years_obs, parallel = T, n.cores = 3, type = "glm", scale = T)
+) # 464 sec on 3 cores
+save(Y_valid_sc_list, file = "/home/simon/Dokumente/Master/master_thesis/scripts/R/data/Y_validation_scaled_glm1.RData")
+#load("/home/simon/Dokumente/Master/master_thesis/scripts/R/data/Y_validation_glm1.RData")
+```
+
+
+```{r plot}
+par(mfrow = c(3,4))
+for(i in 1:11){
+  plot(Y_valid_list[Year_forecast - Year_split == i & obs !=0]$est,  Y_valid_list[Year_forecast - Year_split == i & obs !=0]$obs)
+  lines(c(0,300000), c(0,300000))
+  cor <- cor(Y_valid_list[Year_forecast - Year_split == i & obs !=0]$est,  Y_valid_list[Year_forecast - Year_split == i & obs !=0]$obs)^2
+  mtext(paste("r2 = ", round(cor, 2)), side = 3)
+  cat(i, "")
+}
+```
+
+## scaled
+
+### all coefficients of Y-matrix together
+```{r}
+plot(Y_valid_sc_list[Year_forecast - Year_split == 1 & obs !=0]$est,  Y_valid_sc_list[Year_forecast - Year_split == 1 & obs !=0]$obs, ylim = c(-4, 4), xlim = c(-4, 4))
+lines(c(-4, 4), c(-4, 4))
+cor(Y_valid_sc_list[Year_forecast - Year_split == 1 & obs !=0]$est,  Y_valid_sc_list[Year_forecast - Year_split == 1 & obs !=0]$obs)^2
+  
+```
+
+### DEU industries
+now the same, but only for relevant sectors
+```{r}
+names4vali <- cbind(.id = unique(Y_valid_sc_list$.id), as.data.table(unlist(lapply(Y_names$Country, rep, times = 4))), as.data.table(unlist(lapply(Y_names$Industry, rep, times = 4))), as.data.table(rep(FD_names, 7987)))
+setnames(names4vali, c(".id", "Country", "Industry", "FD_category"))
+
+Y_valid_sc_list_full <- merge(names4vali, Y_valid_sc_list, by = ".id")
+
+
+plot(Y_valid_sc_list_full[Year_forecast - Year_split == 1 & obs !=0 & Country == "Germany"]$est,  Y_valid_sc_list_full[Year_forecast - Year_split == 1 & obs !=0 & Country == "Germany"]$obs, ylim = c(-4, 4), xlim = c(-4, 4))
+lines(c(-4, 4), c(-4, 4))
+cor(Y_valid_sc_list_full[Year_forecast - Year_split == 1 & obs !=0 & Country == "Germany"]$est,  Y_valid_sc_list_full[Year_forecast - Year_split == 1 & obs !=0 & Country == "Germany"]$obs)^2
+```
+r2 is 0.22 when only german industries are regarded (compared to 0.13 for all industries)
+
+### Households in DEU
+```{r}
+plot(Y_valid_sc_list_full[Year_forecast - Year_split == 1 & obs !=0 & Country == "Germany"& FD_category == "Households"]$est,  Y_valid_sc_list_full[Year_forecast - Year_split == 1 & obs !=0 & Country == "Germany" & FD_category == "Households"]$obs, ylim = c(-4, 4), xlim = c(-4, 4))
+lines(c(-4, 4), c(-4, 4))
+cor(Y_valid_sc_list_full[Year_forecast - Year_split == 1 & obs !=0 & Country == "Germany"& FD_category == "Households"]$est,  Y_valid_sc_list_full[Year_forecast - Year_split == 1 & obs !=0 & Country == "Germany"& FD_category == "Households"]$obs)^2
+```
+does not really change if only for FD of households for german products is regarded
+
+### Largest flows
+now lets see how it looks like if we only look at the x largest flows: 
+
+```{r}
+# get largest flows:
+sort(unique(Y_obs_list$`2011`[,lapply(.SD, rank)]$`Final consumption expenditure by households`))
+head(Y_obs_2011)
+Y_obs_2011 <- as.matrix(Y_obs_list$`2011`)
+
+Y_obs_2011_ranks <- as.data.table(matrix(rank(-Y_obs_2011), ncol = ncol(Y_obs_2011), nrow = nrow(Y_obs_2011)))
+Y_obs_2011_ranks <- as.data.table(unlist(transpose(Y_obs_2011_ranks)))
+Y_obs_2011_ranks <- cbind(.id = unique(Y_valid_sc_list$.id), Y_obs_2011_ranks)
+
+Y_valid_sc_list_full <- merge(Y_obs_2011_ranks, Y_valid_sc_list_full, by = ".id")
+setnames(Y_valid_sc_list_full, "V1", "Rank")
+
+rank <- 50
+plot(Y_valid_sc_list_full[Year_forecast - Year_split == 1 & Rank < rank]$est,  Y_valid_sc_list_full[Year_forecast - Year_split == 1 & Rank < rank]$obs, ylim = c(-4, 4), xlim = c(-4, 4))
+lines(c(-4, 4), c(-4, 4))
+cor(Y_valid_sc_list_full[Year_forecast - Year_split == 1 & Rank < rank]$est,  Y_valid_sc_list_full[Year_forecast - Year_split == 1 & Rank < rank]$obs)^2
+```
+
+
+### Year split
+now lets throw out all forecast made with a rather short training data set. Year.split < 2005
+```{r}
+year <- 2009
+plot(Y_valid_sc_list_full[Year_forecast - Year_split == 1 & Year_split > year]$est,  Y_valid_sc_list_full[Year_forecast - Year_split == 1 & Year_split > year]$obs, ylim = c(-4, 4), xlim = c(-4, 4))
+lines(c(-4, 4), c(-4, 4))
+cor(Y_valid_sc_list_full[Year_forecast - Year_split == 1 & Year_split > year]$est,  Y_valid_sc_list_full[Year_forecast - Year_split == 1 & Year_split > year]$obs)^2
+```
+
+the same but also with only the largest flows: 
+```{r}
+year <- 2005
+rank <- 100
+plot(Y_valid_sc_list_full[Year_forecast - Year_split == 1 & Year_split > year& Rank < rank]$est,  Y_valid_sc_list_full[Year_forecast - Year_split == 1 & Year_split > year& Rank < rank]$obs, ylim = c(-4, 4), xlim = c(-4, 4))
+lines(c(-4, 4), c(-4, 4))
+cor(Y_valid_sc_list_full[Year_forecast - Year_split == 1 & Year_split > year& Rank < rank]$est,  Y_valid_sc_list_full[Year_forecast - Year_split == 1 & Year_split > year& Rank < rank]$obs)^2
+```
+
+
+### systematically
+
+```{r}
+year <- 2000:2010
+year2future <- 1:(length(year) - 1)
+cor_mat1 <- matrix(nrow = length(year), ncol = 10)
+colnames(cor_mat1) <- year2future
+rownames(cor_mat1) <- year
+ for(i in 1:length(year)){
+   for(j in 1:length(year2future)){
+     cor_mat1[i,j] <- cor(Y_valid_sc_list_full[Year_forecast - Year_split == year2future[j] & Year_split == year[i]]$est,  Y_valid_sc_list_full[Year_forecast - Year_split == year2future[j] & Year_split == year[i]]$obs)^2
+   }
+ }
+
+par(mfrow = c(3,4))
+ for(i in 1:nrow(cor_mat1)){
+   plot(year2future, cor_mat1[i,], type = "b", ylim = c(0, max(cor_mat1, na.rm = T)), main = rownames(cor_mat1)[i])
+ }
+```
+
+```{r}
+ranks <- c(50, 100, 200, 7987)
+ cor_mat2 <- matrix(nrow = length(ranks), ncol = 10)
+ 
+  for(i in 1:length(ranks)){
+   for(j in 1:length(year2future)){
+     cor_mat2[i,j] <- cor(Y_valid_sc_list_full[Year_forecast - Year_split == year2future[j] & Rank < ranks[i]]$est,  Y_valid_sc_list_full[Year_forecast - Year_split == year2future[j]  & Rank < ranks[i]]$obs)^2
+   }
+ }
+ par(mfrow = c(2,2))
+ for(i in 1:nrow(cor_mat2)){
+   plot(year2future, cor_mat2[i,], type = "b", ylim = c(0, max(cor_mat2, na.rm = T)), main = ranks[i])
+ }
+```
+
+```{r}
+cor_mat3 <- array(dim = c(length(ranks), length(year2future), length(year)))
+for(i in 1:length(ranks)){
+   for(j in 1:length(year2future)){
+     for(k in 1:length(year)){
+     cor_mat3[i,j, k] <- cor(Y_valid_sc_list_full[Year_forecast - Year_split == year2future[j] & Rank < ranks[i]& Year_split == year[k]]$est,  Y_valid_sc_list_full[Year_forecast - Year_split == year2future[j]  & Rank < ranks[i]& Year_split == year[k]]$obs)^2
+     }
+     }
+ }
+
+
+ par(mfrow = c(3,4))
+ for(k in 1:length(year)){
+   plot(year2future, cor_mat3[1,,k], type = "b", ylim = c(0, max(cor_mat3, na.rm = T)), main = year[k], lwd = 2)
+   for(i in 2:length(ranks)){
+     lines(year2future, cor_mat3[i,,k], type = "b", pch = i, col = i, lwd = 2)
+   }
+ }
+plot(year2future, cor_mat3[1,,k], ylim = c(0, max(cor_mat3, na.rm = T)), ylab = "", xlab = "", type = "n", yaxt = "n", xaxt = "n", bty = "n")
+ legend("topleft", legend = ranks, col = 1:length(ranks), pch = 1:length(ranks), bty = "n")
+
+```
+
+

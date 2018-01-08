@@ -1,0 +1,218 @@
+---
+title: "EB3_results_evaluation"
+author: "Simon Schulte"
+date: "14 März 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# load packages
+```{r}
+library(xlsx)
+library(RColorBrewer)
+require(devtools)
+install_github('simonpedrobolivar/masterthesis/MRIOtools')
+require(MRIOtools)
+require(data.table)
+require(gdata)
+```
+
+
+# parameter settings
+```{r parameters}
+colors <- brewer.pal(12, "Set3") # colors for plots
+n_ind <- 163 # number of industries
+n_countries <- 49 # number of countries (40 + 1 RoW)
+years_obs <- 1995:2015 # years for which IO table exists
+n_years_obs <- length(years_obs)
+years_est <- c(2020, 2030)
+years <- c(years_obs, years_est)
+n_FDcat <- 4 # final demand sectors (household, non-gov, gov, capital formation)
+n_GHGs <- 4 # number of relevant GHGs (CO2, CH4, N2O, SF6)
+path2results <- "/home/simon/Dokumente/Master/master_thesis/Results/"
+path4plots <- "/home/simon/Dokumente/Master/master_thesis/figures/"
+```
+
+
+# read data
+```{r}
+setwd("~/Dokumente/Master/master_thesis/Results/MRIO_Results/Timeseries 1995 – 2015_2017_11_20__19_16_11")
+files = list.files(pattern="Midpoint footprints, Germany")[1:n_years_obs]
+midpoint_footprints_list <- lapply(files, function(x) fread(x, sep = "\t", header = T)) # read the files. List of data.tables. Each element of the list represents ONE year. 
+
+names(midpoint_footprints_list) <-  years_obs # set names
+midpoint_footprints_dt <- rbindlist(midpoint_footprints_list, idcol = T) # creating one large data.table 
+setnames(midpoint_footprints_dt, ".id", "Year") # change names
+#head(midpoint_footprints_dt) # check data.table
+```
+
+
+```{r saving country/insdustry names}
+countries_names <- as.vector(unique(midpoint_footprints_dt$Country))
+industries_names <- as.vector(unique(midpoint_footprints_dt$Industry))
+industriesXcountries_names <- midpoint_footprints_dt[Year == "1995"][,2:3]
+save(countries_names, file= "/home/simon/Dokumente/Master/master_thesis/scripts/R/data/countries_names.RData")
+save(industries_names, file= "/home/simon/Dokumente/Master/master_thesis/scripts/R/data/industries_names.RData")
+save(industriesXcountries_names, file= "/home/simon/Dokumente/Master/master_thesis/scripts/R/data/industriesXcountries_names.RData")
+```
+
+```{r check indices}
+industriesXcountries_names[Country == "Germany"][96:107,]
+test <- cbind(1:7987, industriesXcountries_names)
+test[Country == "RoW Middle East"][96:107,]
+midpoint_footprints_dt
+```
+
+
+
+# create matrices
+```{r}
+GWP100byCountry <- midpoint_footprints_dt[, sum(`Global Warming Potential 100`), by=.(Year, Country)]
+GWP100byIndustry <- midpoint_footprints_dt[, sum(`Global Warming Potential 100`), by=.(Year, Industry)]
+
+GWP100byGHG <- fread... # Todo
+```
+
+# industries with largest GHG impact
+```{r}
+GWP100detailed <- midpoint_footprints_dt[Year == 2011,c(1,2,3, 8)]
+setnames(GWP100detailed, 4, "GWP100")
+GWP100detailed <- cbind(GWP100detailed, "rank" = frankv(GWP100detailed, "GWP100", order = -1, ties.method = "min",na.last = "keep"))
+
+
+
+GWP100detailed[rank %in% 1:500, sum(GWP100)] / GWP100detailed[,sum(GWP100)] # mit 500 industries > 90 % des GWP abgedeckt
+a <- setorder(GWP100detailed[rank %in% 1:100], rank)
+barplot(a$GWP100)
+
+
+```
+
+
+
+# plot results
+## by country
+```{r}
+pdf(paste0(path4plots, "GWP100byCountry.pdf"))
+stacked_area_plot(GWP100byCountry, agg = T, agg.level = 7, colorvec = colors, yaxt.steps = 100, xaxt.steps = 5, legend.pos = "topleft", ylab = "CO2-eq [Mt]", ylim.adjust = 150, legend.ncol = 3)
+dev.off()
+```
+- australia seems to from 2012 
+
+## by industry
+```{r}
+#pdf(paste0(path4plots, "GWP100byIndustry.pdf"))
+stacked_area_plot(GWP100byIndustry, agg = T, agg.level = 7, colorvec = colors, yaxt.steps = 500, xaxt.steps = 5, legend.pos = "topleft", legend.ncol = 1, ylab = "CO2-eq [Mt]", ylim.adjust = 2000)
+#dev.off()
+```
+
+100 industries that contribute most: 
+```{r}
+GWP100_total_byCountryInd <- midpoint_footprints_dt[, sum(`Global Warming Potential 100`), by=.(Industry, Country)]
+
+top100ind <- GWP100_total_byCountryInd[order(-V1)][1:100,]
+top100ind[,sum(V1)]/GWP100_total_byCountryInd[,sum(V1)]
+```
+
+
+## individual countries 
+### Australia
+closer look at australia
+```{r}
+GWP100Australia_byInd <-  midpoint_footprints_dt[Country == "Australia", sum(`Global Warming Potential 100`), by = .(Year, Industry)]#[,c(1,2,3,8)]
+
+stacked_area_plot(GWP100Australia_byInd, agg = T, agg.level = 7, colorvec = colors, yaxt.steps = 10, xaxt.steps = 5, legend.pos = "topleft", legend.ncol = 1, ylab = "CO2-eq [Mt]", ylim.adjust = 20, legend.bty = "n")
+
+```
+
+
+# compare scenarios
+
+## read data
+```{r}
+setwd("/home/simon/Dokumente/Master/master_thesis/Calculation")
+scenario_names <- as.character(read.xls("MRIO_Config.xlsx", sheet = 2, header = TRUE, skip = 1)$Scenario.Setting.name)
+scenarios4plot <- scenario_names[2:4]
+```
+
+```{r}
+results_list <- list()
+for(i in 1:length(scenarios4plot)){
+  path <- paste0(path2results, "MRIO_Scenarios_Results/", scenarios4plot[i])
+  path <- paste0(path, "/", tail(list.files(path), n = 1))
+  setwd(path)
+  files = list.files(pattern=("Midpoint footprints, Germany"))
+  if(length(files) > 1){
+    s1_results_list <- lapply(files, function(x) fread(x, sep = "\t", header = T)) # read the files. List of data.tables. Each element of the list represents ONE year. 
+    names(s1_results_list) <-  2020 # set names
+    s1_results_dt <- rbindlist(s1_results_list, idcol = T) # creating one large data.table 
+    setnames(s1_results_dt, ".id", "Year") # change names
+  }else{
+    s1_results_dt <- fread(files[1], sep = "\t", header = T)
+  }
+  results_list[[i]] <- s1_results_dt
+  cat(i, "")
+}
+names(results_list) <- scenarios4plot
+```
+
+```{r}
+setwd("/home/simon/Dokumente/Master/master_thesis/Results/MRIO_Results/Timeseries 1995 – 2015_2017_11_20__19_16_11")
+GWP100_2011 <- fread("Midpoint footprints, Germany, 2011 Mt.txt", sep = "\t", header = T)
+GWP100_2011_total <-  GWP100_2011[,sum(`Global Warming Potential 100`)] + results_list$Scenario_5$`Global Warming Potential 100`[nrow(results_list[[1]])]
+```
+
+
+## total
+```{r}
+scenarios_GWP100_total <- sapply(results_list, function(x) return(x[, sum(`Global Warming Potential 100`)]))
+par(oma = c(4,0,0,0))
+barplot(c("2011" = GWP100_2011_total, scenarios_GWP100_total), col = colors[4:7],  
+        ylim = c(0, 1.3*max(scenarios_GWP100_total)), las = 2, angle = 90, 
+        ylab = "GHG-Emissions in Mt", border = NA)
+```
+
+## by country
+```{r}
+scen_GWP100byCountry = lapply(results_list, function(x) return(x[, sum(`Global Warming Potential 100`), by = .(Country)]))
+scen_GWP100byCountry_agg = lapply(scen_GWP100byCountry, function(x) return(aggregate_datatable(x, 8, col = "V1")))
+df <- sapply(scen_GWP100byCountry_agg, function(x) return(x$V1))
+barplot(df, col = colors, names.arg = scenarios4plot, 
+        width = c(0.1, 0.1), space = 0.1, ylim = c(0, 1.2*max(colSums(df))), las = 2)
+
+legend("top", legend = scen_GWP100byCountry_agg[[1]]$Country, col = colors)
+```
+
+
+```{r}
+regions2plot <- c("Germany", "China", "Russia", "United States", "India", "RoW Middle East")
+lapply(scen_GWP100byCountry, setorder)
+
+par(mar = c(3.1, 2.1, 2.1, 2.1), oma = c(3,1,1,1))
+scenarios_barplot(scen_GWP100byCountry, regions2plot, scale = T, grid = T, yaxt.steps = 10, col = colors[4:7], legend = T, ylim.adjust = 90)
+
+```
+
+## by industry
+
+```{r}
+scen_GWP100byInd = lapply(results_list, function(x) return(x[, sum(`Global Warming Potential 100`), by = .(Industry)]))
+industries2plot <- as.vector(aggregate_datatable(scen_GWP100byInd[[1]], 8, "V1")$Industry[-9])
+industries2plot <- scen_GWP100byInd[[1]]$Industry[which(substr(scen_GWP100byInd[[1]]$Industry, 1, 15 ) == "Production of e")]
+
+```
+
+```{r}
+
+par(oma = c(5,1,1,1))
+scenarios_barplot(scen_GWP100byInd, industries2plot, grid = T, yaxt.steps = 5, col = colors[4:7], ylim.adjust = 40, scale =T, legend.pos = "topleft", border = NA)
+
+```
+
+
+
+
+

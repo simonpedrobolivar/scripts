@@ -1,0 +1,527 @@
+---
+title: "extrapolateWIOD_Y"
+author: "Simon Schulte"
+date: "9 März 2017"
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+#knitr::opts_knit$set(root.dir = "~/Dokumente/ResearchMethodsIndustrialEcology/myproject")
+```
+
+```{r}
+library(xlsx)
+library(RColorBrewer)
+library(plotly)
+library(xtable)
+```
+
+functions
+
+
+
+
+set colors
+```{r}
+colors <- brewer.pal(12, "Set3")[-2]
+RColorBrewer::display.brewer.pal(12, "Set3")
+```
+
+
+# the BAU scenario
+
+## setting the constant parameters
+from WIOD
+```{r}
+setwd("~/Dokumente/ResearchMethodsIndustrialEcology/myproject/data/WIOD/IO_tables")
+
+n_ind <- 35 # number of industries
+n_countries <- 41 # number of countries (40 + 1 RoW)
+years_obs <- 1995:2011 # years for which IO table exists
+n_years <- length(years_obs)
+n_sectors <- 4 # final demand sectors (household, non-gov, gov, capital formation)
+exchange_rates <- c(1.36626,	1.30024	,1.12945	,1.11308	,1.06580	,0.92360	,0.89560	,0.94560	,1.13120,	1.24390,	1.24410	,1.25560,	1.37050	,1.47080,	1.39480,	1.32570,	1.39200) # 1 € = ...$US (according to WIOD)
+
+```
+
+## loading the data
+from WIOD database
+(downloaded and prepared via python scripts *download_data.py* and *extractYfromWIOD.py*, see data folder)
+```{r}
+Y_list <- list() # 
+Y_total <- as.data.frame(matrix(nrow = n_years, ncol = n_sectors + 1))
+print(getwd())
+for(i in 1:n_years){
+  y_raw <- read.table(paste("~/Dokumente/Master/3. FS/ResearchMethodsIndustrialEcology/myproject/data/WIOD/IO_tables/Y_matrix_raw",1994+i,".csv",sep = ""), header = F, sep = ",", skip = 3)
+  y <- as.data.frame(y_raw)
+  y[,5:8] <- y[,5:8]/exchange_rates[i] # from US$ to €uro
+  colnames(y) <- c("ind.code", "industry", "country", "index", "household", "non_gov", "gov", "capital_formation")
+  Y_list[[i]] <- y # append to list
+  # calc total final demand by dif acteurs:
+  Y_total[i,1] <- sum(y$household)
+  Y_total[i,2] <- sum(y$non_gov)
+  Y_total[i,3] <- sum(y$gov)
+  Y_total[i,4] <- sum(y$capital_formation)
+  Y_total[i,5] <- sum(Y_total[i,1:4])
+  print(length(y_raw[,1]))
+}
+names(Y_list) <- rownames(Y_total) <- years_obs
+colnames(Y_total) <- c("household", "non_gov", "gov", "capital_formation", "total")
+```
+
+a first overview
+```{r}
+gdp <- read.table("~/Dokumente/Master/3. FS/ResearchMethodsIndustrialEcology/myproject/data/WIOD/GDP.txt", sep = "\t", header = T)
+gdp <- gdp[order(gdp$Year),]
+par(mfrow = c(1,1))
+plot(years_obs, Y_total$total/1e3, type = "l")
+lines(years_obs, gdp$Daten[which(gdp$Year %in% years_obs)])
+
+
+barplot(t(as.matrix(Y_total[,1:4]))/1000, main = "Final Demand Germany [€ Billion]", col =rainbow(4))
+legend("topleft", legend = colnames(Y_total[,1:4]), col = rainbow(4), lty = c(1,1,1,1))
+
+```
+
+
+## prepare the data for extrapolation
+In order to fit a linear model (lm) for each coefficient of the Y-matrix following steps need to be undertaken: 
+1) timeseries for each coefficient (data frame with one column *years* and one col *coefficient value*)
+2) fit a lm to each timeseries (using the lm function)
+3) predicting each coefficient into the future using the fitted models
+
+### making timeseries for each coefficient in the Y-matrix
+```{r}
+timeseries <- list()
+household <- government <- non_gov <- capital_formation <- total <- list()
+timeseries <- list("household" = household, "non_gov" = non_gov, "government" = government,  "capital_formation" = capital_formation)
+time_vec <- as.data.frame(matrix(nrow = n_years, ncol = 2))
+colnames(time_vec) <- c("year", "value")
+time_vec[,1] <- years_obs
+for(i in 1:n_sectors){ # houshold, gov, ... (cols)
+  for(j in 1:(n_ind*n_countries)){ # industrial sectors x countries = 35 x 41
+    for(k in 1:n_years){
+      time_vec[k,2] <- Y_list[[k]][j,i+4]
+    }
+    timeseries[[i]][[length(timeseries[[i]])+1]] <- time_vec
+    names(timeseries[[i]])[length(timeseries[[i]])] <- as.vector(paste(Y_list[[k]][j,2], Y_list[[k]][j,3]))
+  }
+}
+```
+
+
+### plot timeseries
+```{r}
+par(mfrow = c(3,3))
+for(i in 1:10){
+  plot(timeseries[[1]][[i]][,1], timeseries[[1]][[i]][,2], type = "l", main = names(timeseries[[1]])[i], cex.main = 0.8)}
+```
+
+### fit a model and predict to future
+```{r}
+###Log fit - be sure to use quotes around the variable names in the call
+log.fit <- function(dep, ind, yourdata){
+#Self-starting...
+
+y <- yourdata[, dep]
+x <- yourdata[, ind]
+
+log.ss <- nls(y ~ SSlogis(x, phi1, phi2, phi3))
+
+#C
+C <- summary(log.ss)$coef[1]
+#a
+A <- exp((summary(log.ss)$coef[2]) * (1/summary(log.ss)$coef[3]))
+#k
+K <- (1 / summary(log.ss)$coef[3])
+
+plot(y ~ x, main = "Logistic Function", xlab=ind, ylab=dep)
+lines(0:max(x), predict(log.ss, data.frame(x=0:max(x))), col="red")
+
+r1 <- sum((x - mean(x))^2)
+r2 <- sum(residuals(log.ss)^2)
+
+r_sq <- (r1 - r2) / r1
+
+out <- data.frame(cbind(c(C=C, a=A, k=K, R.value=sqrt(r_sq))))
+names(out)[1] <- "Logistic Curve"
+
+return(out)
+}
+```
+
+
+
+
+
+
+
+
+```{r extrapolation}
+testfit <- nlxb(value ~ x / (1 + exp( -slope * (year-x0) ) ), start = list(slope = 0.1, x = 100, x0 = 0),  data = timeseries[[1]][[6]])
+plot(years, c(timeseries[[1]][[6]]$value, 0, 0,0, 0), ylim = c(0, 100))
+logfun <- function(year, slope, x, x0) return(year / (1 + exp( -slope * (x-x0) ))) 
+testpreds <- logfun(years, testfit$coefficients[1], testfit$coefficients[2], testfit$coefficients[3])
+lines(years, testpreds, col = "red")
+
+testfit <- nls(value ~ SSlogis(year, Asym, xmid, scal), data = timeseries[[1]][[5]])
+summary(testfit)
+profile(testfit)
+testpreds <- logfun(years, testfit$m$fitted())
+testpreds <- predict(testfit, newdata = data.frame("year" = years), se.fit = F)
+lines(years, testpreds, col = "red")
+
+
+testfit <- gam(value ~ s(year, k = 2), data = timeseries[[1]][[6]])
+testpreds <- predict(testfit, newdata = data.frame("year" = as.numeric(years)), se.fit = T)
+lines(as.numeric(years), testpreds$fit, col = "red")
+
+
+
+
+fm_list <- pred_list <- list("household" = household, "non_gov" = non_gov, "government" = government, "capital_formation" = capital_formation)
+####-----Years to for prediction---####
+years_new <- c(2012:2014, seq(2015, 2045, 10))
+####-------------------------------####
+
+Y_pred_total <- matrix(0, nrow = length(years_new), ncol = 4)
+Y_pred_se_total <- matrix(0, nrow = length(years_new), ncol = 4)
+rownames(Y_pred_total) <- rownames(Y_pred_se_total)<- years_new
+Y_obs_total <- matrix(0, nrow = n_years, ncol = 4)
+
+for(k in 1:4){# for household, gov, non-gov
+  for(i in 1:(n_ind*n_countries)){
+   # print(i)
+    fm_list[[k]][[length(fm_list[[k]])+1]] <- glm(value ~ year, data = timeseries[[k]][[i]])
+    #fm_list[[k]][[length(fm_list[[k]])+1]] <- gam(value ~ s(year, k = 3), data = timeseries[[k]][[i]])
+    #fm_list[[k]][[length(fm_list[[k]])+1]] <- arima(timeseries[[k]][[i]]$value)
+    #fm_list[[k]][[length(fm_list[[k]])+1]] <- log.fit("year", "value", timeseries[[k]][[i]])
+    
+    preds_output <- predict(fm_list[[k]][[length(fm_list[[k]])]], newdata = data.frame("year" = years_new), se.fit = T) # predictions
+    preds <- apply(as.matrix(preds_output$fit), c(1,2), FUN = function(x) ifelse(x < 0, return(0), return(x))) # all values < 0 are set to 0
+    preds_se <- apply(as.matrix(preds_output$se.fit), c(1,2), FUN = function(x) ifelse(x < 0, return(0), return(x))) # all values < 0 are set to 0
+
+    pred_list[[k]][[length(pred_list[[k]])+1]] <- data.frame("years" = years_new, "value" = preds, "se" = preds_se)
+    Y_pred_total[,k] <- Y_pred_total[,k] + preds
+    Y_pred_se_total[,k] <- Y_pred_se_total[,k] + preds_se
+  }
+  names(fm_list[[k]]) <- names(pred_list[[k]]) <- names(timeseries[[k]])
+}
+colnames(Y_pred_total) <- colnames(Y_pred_se_total) <- names(timeseries)
+
+```
+
+#### plot the predictions
+```{r}
+par(mfrow = c(3,3))
+for(i in 1:100){
+  plot(pred_list[[3]][[i]]$years, pred_list[[3]][[i]]$value, type = "l", main = names(pred_list[[3]])[i], cex.main = 0.8)
+}
+```
+ 
+predictions together with observed values
+```{r}
+pdf(paste0(path2plots, "pred_vs_obs_sefit.pdf"))
+par(mfrow = c(3,3))
+for(i in (9*35+1):(10*35)){
+  plot(pred_list[[1]][[i]]$years,pred_list[[1]][[i]]$value, type = "l", main = names(pred_list[[1]])[i], cex.main = 0.8, xlim = c(1995,2045), ylim = c(0, 1.1*max(c(pred_list[[1]][[i]]$value, timeseries[[1]][[i]]$value))), xlab = "Year", ylab = "Final Demand [Mil. Euro]", cex.lab = 0.8, cex.axis = 0.8)
+  lines(pred_list[[1]][[i]]$years,pred_list[[1]][[i]]$value + 2 * pred_list[[1]][[i]]$se, lty = 2)
+  lines(pred_list[[1]][[i]]$years,pred_list[[1]][[i]]$value - 2 * pred_list[[1]][[i]]$se, lty = 2)
+  lines(timeseries[[1]][[i]], col = "red", lwd = 3)
+}
+dev.off()
+```
+
+variance check
+```{r}
+var_list <- list()
+for(i in 1:length(pred_list[[1]])){
+  var_list[[i]] <- var(pred_list[[1]][[i]]$value)
+}
+head(pred_list[[1]])
+```
+
+
+
+
+## create matrices with detailed Y for each year
+Now the extrapolated Y-matrixes need to be put into a one matrix for each year
+--> necessary for running the model (WIOD_Results.py)
+--> necessary for having a closer look at the outcome
+```{r}
+Y_times_list <- list() # list for Y-matrixes for each year
+Y_plus_se_times_list <- list()
+Y_minus_se_times_list <- list()
+
+Y_mat <- as.data.frame(matrix(0, nrow = length(timeseries[[1]]), ncol = 6))
+Y_plus_se_mat <- as.data.frame(matrix(0, nrow = length(timeseries[[1]]), ncol = 6))
+Y_minus_se_mat <- as.data.frame(matrix(0, nrow = length(timeseries[[1]]), ncol = 6))
+dim(Y_list[[1]][,c(4,3, 5:8)][,-c(1,2)])
+# first for Observed values
+for(i in 1:n_years){
+  write.table(Y_list[[1]][,c(4,3, 5:8)][,-c(1,2)], paste("/home/simon/Dokumente/ResearchMethodsIndustrialEcology/myproject/data/WIOD/IO_tables/Y_matrix", years_obs[i], ".csv", sep = ""), row.names = F, col.names = F, sep = ",") 
+  Y_times_list[[i]] <- Y_list[[i]][,c(4,3, 5:8)]
+}
+# second for Extrapolated values
+for(t in 1:length(years_new)){
+  for(i in 1:n_sectors){ # for household, non-gov etc.
+    for(j in 1:length(timeseries[[1]])){ # for ind. x countries
+      Y_mat[j,1] <- Y_plus_se_mat[j,1] <- Y_minus_se_mat[j,1] <- as.character(Y_list[[1]][j,4])
+      Y_mat[j,2] <- Y_plus_se_mat[j,2] <- Y_minus_se_mat[j,2] <- as.character(Y_list[[1]][j,3])
+      
+      Y_mat[j,i+2] <- pred_list[[i]][[j]][t,2]
+      Y_plus_se_mat[j,i+2] <- pred_list[[i]][[j]][t,2] + 2 * pred_list[[i]][[j]][t,3]
+      Y_minus_se_mat[j,i+2] <- pred_list[[i]][[j]][t,2] - 2 * pred_list[[i]][[j]][t,3]
+    }
+  }
+  colnames(Y_mat) <- c("index", "country", "household", "non_gov", "gov", "capital_formation")
+  write.table(Y_mat[,-c(1,2)], paste("/home/simon/Dokumente/ResearchMethodsIndustrialEcology/myproject/data/WIOD/IO_tables/Y_matrix", years_new[t], ".csv", sep = ""), row.names = F, col.names = F, sep = ",") 
+  
+    write.table(Y_plus_se_mat[,-c(1,2)], paste("/home/simon/Dokumente/ResearchMethodsIndustrialEcology/myproject/data/WIOD/IO_tables/Y_plus_se_matrix", years_new[t], ".csv", sep = ""), row.names = F, col.names = F, sep = ",") 
+    
+      write.table(Y_minus_se_mat[,-c(1,2)], paste("/home/simon/Dokumente/ResearchMethodsIndustrialEcology/myproject/data/WIOD/IO_tables/Y_minus_se_matrix", years_new[t], ".csv", sep = ""), row.names = F, col.names = F, sep = ",") 
+  Y_times_list[[length(Y_times_list)+1]] <- Y_mat
+  Y_plus_se_times_list[[length(Y_plus_se_times_list)+1]] <- Y_plus_se_mat
+  Y_minus_se_times_list[[length(Y_minus_se_times_list)+1]] <- Y_minus_se_mat
+}
+names(Y_times_list) <- names(Y_plus_se_times_list) <- names(Y_minus_se_times_list) <-years_new
+
+# total demand (sum of demand of all 4 sectors)
+for(i in 1:length(Y_times_list)){
+  total_finaldemand <- apply(Y_times_list[[i]][,3:6], 1, sum)
+  Y_times_list[[i]] <- cbind(Y_times_list[[i]], total_finaldemand)  
+}
+```
+
+
+## Analysing the exptrapolated Y-matrices
+How is the demand distributed to the industries, countries and regions??
+
+### create matrices
+3 Matrices are created: 
+1) Final demand by year and country
+1) Final demand by year and region (Europe, BRIC, etc.)
+1) Final demand by year and industry
+
+
+```{r}
+require(gdata)
+config_sheet = read.xls("/home/simon/Dokumente/Master/3. FS/ResearchMethodsIndustrialEcology/myproject/Calculation/WIOD_Config.xlsx", sheet = 3, header = T)
+
+config_sheet2 = read.xls("/home/simon/Dokumente/Master/3. FS/ResearchMethodsIndustrialEcology/myproject/Calculation/WIOD_Config.xlsx", sheet = 5, header = T)
+countries_names <- as.character(config_sheet$Symbol)[1:41]
+countries_region <- as.character(config_sheet$Region)[1:41]
+industries_realnames <- as.character(config_sheet2$X.1)[-1]
+
+xtable(as.data.frame(industries_realnames))
+#countries_names <- unique(Y_times_list[[1]]$country)
+industries_names <- as.character(unique(Y_times_list[[1]]$index))
+Y_by_country_mat <- matrix(ncol = n_countries, nrow = length(Y_times_list))
+Y_by_ind_mat <- matrix(ncol = n_ind, nrow = length(Y_times_list))
+
+colnames(Y_by_country_mat) <- countries_names
+#<- c(years_obs, years_new)
+colnames(Y_by_ind_mat) <- industries_names
+
+for(i in 1:length(Y_times_list)){
+  for(j in 1:n_countries){
+    Y_by_country_mat[i, j] <- sum(Y_times_list[[i]][which(Y_times_list[[i]]$country == countries_names[j]),]$total_finaldemand)/1E3
+  }
+  for(k in 1:n_ind){
+    Y_by_ind_mat[i, k] <- sum(Y_times_list[[i]][which(as.character(Y_times_list[[i]]$index) == industries_names[k]),]$total_finaldemand)/1E3
+  }
+}
+
+temp <- Y_by_country_mat
+colnames(temp) <- countries_region
+Y_by_region_mat <- matrix(nrow = length(Y_times_list), ncol = length(unique(countries_region)))
+colnames(Y_by_region_mat) <- unique(countries_region)
+for(i in 1:length(Y_times_list)){
+  for(l in 1:length(unique(countries_region))){
+    Y_by_region_mat[i, l] <- sum(temp[i,][which(names(temp[i,]) == unique(countries_region)[l])])
+  }
+}
+rownames(Y_by_country_mat) <- rownames(Y_by_region_mat) <- c(years_obs, years_new)
+```
+
+
+###total demand: 
+```{r}
+Y_total_scenario <- apply(Y_by_country_mat, 1, sum)
+Y_by_sector_mat <- matrix(ncol = 5, nrow = length(Y_times_list))
+rownames(Y_by_sector_mat) <- c(years_obs, years_new)
+colnames(Y_by_sector_mat) <- c("Households", "NPISH", "Government", "GFCF", "total")
+for(i in 1:length(Y_times_list)){
+  Y_by_sector_mat[i,] <- apply(Y_times_list[[i]][,3:7], 2, sum)/1E3 # in billion Euro
+} 
+
+Y_by_sector_percent <- Y_by_sector_cumul <- matrix(ncol = 4, nrow = length(Y_times_list))
+rownames(Y_by_sector_percent) <- c(years_obs, years_new)
+colnames(Y_by_sector_percent) <- c("Households", "NPISH", "Government", "GFCF")
+
+Y_by_sector_cumul <- cumulate_matrix(Y_by_sector_mat[,-5])
+for(i in 1:4) Y_by_sector_percent[,i] <- Y_by_sector_mat[,i] / Y_by_sector_mat[,5]
+
+# some calculations:
+100 * Y_by_sector_mat[,5] / Y_by_sector_mat[,5][1]
+100 * Y_by_sector_mat[,5] / Y_by_sector_mat[,5][17]
+
+(Y_by_sector_mat[21,5] - Y_by_sector_mat[18,5] ) / (30 *Y_by_sector_mat[18,5])
+(Y_by_sector_mat[17,5] - Y_by_sector_mat[1,5] ) / (17 *Y_by_sector_mat[1,5]) 
+ 
+plot(Y_by_sector_percent[,1], type = "l", ylim =c(0, 1))
+for ( i in 2:4) lines(Y_by_sector_percent[,i], col = i)
+legend("topleft", legend = colnames(Y_by_sector_percent), col =1:4, lty =1)
+
+# save the table
+newtable <- xtable(Y_by_sector_mat)
+print.table(newtable, type = "latex", file = paste0(path2plots, "Y_by_sector.tex"))
+```
+
+### plot total demand
+normal plot
+```{r}
+plot(c(years_obs,years_new), Y_total_scenario, type = "l")
+lines(years_obs, gdp$Daten[which(gdp$Year %in% years_obs)]-170)
+```
+
+
+#### pyplot
+```{r}
+data <- as.data.frame(cbind("year" = as.numeric(rownames(Y_by_sector_cumul)), Y_by_sector_cumul))[,-6]
+data
+p <- plot_ly(data, x = ~year, y = ~Households, name = 'Households', type = 'scatter', mode = 'none', fill = 'tozeroy', fillcolor = colors[2]) %>%
+  add_trace(y = ~Government, name = 'Government', fillcolor = colors[3]) %>%
+  add_trace(y = ~GFCF, name = 'GFCF', fillcolor = colors[4]) %>%
+  add_trace(y = ~NPISH, name = 'NPISH', fillcolor = colors[5]) %>%
+  add_trace(y = c(0, 3000), x = 2011, mode = "lines", line = list(dash = 1, width = 1,color = "black"), inherit = F, type = "scatter", showlegend = F, opacity = 1) %>%
+  add_trace(y = gdp$Daten[which(gdp$Year == 1995):which(gdp$Year == 2016)], x = c(1995:2016) ,mode = "lines", line = list(width = 1,color = "black"), inherit = F, type = "scatter", showlegend = T, name = "GDP") %>%
+  layout(title = '',
+         xaxis = list(title = "",
+                      showgrid = FALSE),
+         yaxis = list(title = "Final demand [Billion €]",
+                      showgrid = FALSE))
+
+p
+export(p, file = paste0(path2plots, "Y_by_sector_cumul.pdf"), vwidth = 4, vheight = 4)
+```
+
+#### trying the same with base
+```{r}
+ # create first polygon
+xx <- c(data$year, rev(data$year))
+yy1 <- c(rep(0, nrow(data)), rev(data$Households))
+yy2 <- c(rep(0, nrow(data)), rev(data$Government))
+yy3 <- c(rep(0, nrow(data)), rev(data$GFCF))
+yy4 <- c(rep(0, nrow(data)), rev(data$NPISH))
+
+plot(x=data$year, y=data$Households, col=colors[2], type='l', ylim=1.1*c(0, max(data$Households)), 
+     xlab = "Year", ylab = "Final demand [Billion €]", bty= "n", xaxt = "n", yaxt = "n",
+     las = 2)
+axis(1, at = seq(1995, 2045, 5), lwd.ticks = 0.5, lwd = 0.5)
+axis(2, at = seq(0, 3500, 500), las = 2, lwd.ticks = 0.5, lwd = 0.5)
+polygon(xx, yy1, col=colors[2], border=colors[2])
+polygon(xx, yy2, col=colors[3], border=NA)
+polygon(xx, yy3, col=colors[4], border=NA)
+polygon(xx, yy4, col=colors[5], border=NA)
+abline(v = 2011, lty = 2)
+legend("topleft", legend = colnames(data)[-1], fill = colors[2:5], 
+       bty = "n", border = colors[2:5])
+```
+
+
+
+
+### plot the demand per country and region
+per country
+```{r}
+# sort(Y_by_country_mat[21,], T)
+plot(c(years_obs,years_new), Y_by_country_mat[,1], type = "l", ylim = c(0, max(Y_by_country_mat[,-which(colnames(Y_by_country_mat) == "DEU")])))
+for(i in (1:n_countries)[-which(colnames(Y_by_country_mat) == "DEU")]){
+  lines(c(years_obs, years_new), Y_by_country_mat[,i], col= i+1)
+}
+text(rep(years_new[length(years_new)], 20), Y_by_country_mat[nrow(Y_by_country_mat),][-which(colnames(Y_by_country_mat) == "DEU")], colnames(Y_by_country_mat)[-which(colnames(Y_by_country_mat) == "DEU")], cex = 0.5)
+
+```
+per region
+```{r}
+# first without germany:
+plot(c(years_obs,years_new), Y_by_region_mat[,1], type = "l", ylim = c(0, max(Y_by_region_mat[,-5])), col = 1, xlab = "Year",ylab = "Final Demand Germany [Billion €]")
+abline(v = 2011, lty = 2)
+for(i in c(2:4,6)){
+  lines(c(years_obs,years_new), Y_by_region_mat[,i], col= i)
+}
+legend(1994, 400, legend = colnames(Y_by_region_mat)[-5], col = 1:6, lty = 1, bg = "white", box.col  = "white")
+
+# the same with germany: 
+plot(c(years_obs,years_new), Y_by_region_mat[,1], type = "l", ylim = c(0, max(Y_by_region_mat)), col = 1, xlab = "Year",ylab = "Final Demand Germany [Billion €]")
+for(i in c(2:7)){
+  lines(c(years_obs,years_new), Y_by_region_mat[,i], col= i)
+}
+legend(2025, 2000, legend = colnames(Y_by_region_mat), col = 1:7, lty = 1, bg = "white", box.col  = "white")
+```
+
+proportional 1995 and 2040
+```{r}
+barplot(t(Y_by_region_mat[c(17,21),]), col = (1:9)[-c(5, 6)])
+legend("topleft", legend = colnames(Y_by_region_mat), col = (1:9)[-c(5, 6)], lty = 1, bg = "white", box.col  = "white")
+```
+
+pie plot
+```{r}
+pdf(paste0(path2plots, "Y_by_region_pie.pdf"))
+par(mfrow = c(1,2), oma = c(1,1,1,1)) #, mar = c(1, 1, 1 , 1)
+pie(Y_by_region_mat[c(17),-7], col = rainbow(8), radius = sum(Y_by_region_mat[c(17),-7])/sum(Y_by_region_mat[c(21),-7]), main = "2011")
+pie(Y_by_region_mat[c(21),-7], col = rainbow(8), init.angle = 17, las = 2, radius = 1, main = "2045")
+dev.off()
+```
+
+scale to 100
+```{r}
+Y_by_region_mat100 <- scaleTo100(Y_by_region_mat, 2011)
+plot(c(years_obs,years_new), Y_by_region_mat100[,1], type = "l", ylim = c(0, max(Y_by_region_mat100)), col = 1, xlab = "Year",ylab = "Final Demand Germany [Billion €]")
+for(i in c(2:7)){
+  lines(c(years_obs,years_new), Y_by_region_mat100[,i], col= rainbow(7)[i])
+}
+legend(2025, 450, legend = colnames(Y_by_region_mat100), col = rainbow(7, alpha = 1)
+, lty = 1, bg = "white", box.col  = "white")
+
+```
+
+
+
+
+per industry
+```{r}
+# all industries:
+plot(c(years_obs,years_new), Y_by_ind_mat[,1], type = "l", ylim = c(0, max(Y_by_ind_mat)))
+for(i in (1:n_ind)){
+  lines(c(years_obs, years_new), Y_by_ind_mat[,i], col= i+1)
+}
+text(rep(years_new[length(years_new)], 20), Y_by_ind_mat[nrow(Y_by_ind_mat),], colnames(Y_by_ind_mat), cex = 0.5)
+
+# only the industries with decreasing demand
+decreas_index <- as.numeric(which(Y_by_ind_mat[1,] > Y_by_ind_mat[21,]))
+plot(c(years_obs, years_new), Y_by_ind_mat[,decreas_index[1]], type = "l", ylim = c(0, max(Y_by_ind_mat[,decreas_index])))
+for(i in 2:length(decreas_index)){
+  lines(c(years_obs, years_new), Y_by_ind_mat[,decreas_index[i]], col = i)
+}
+legend("topright", legend = industries_realnames[decreas_index], col = 1:length(decreas_index), lty = 1)
+```
+
+
+scale to 100
+```{r}
+Y_by_ind_mat_agg <- aggregate_matrix(Y_by_ind_mat, 5)
+Y_by_ind_mat100 <- scaleTo100(Y_by_ind_mat_agg, 2011)
+plot(c(years_obs,years_new), Y_by_ind_mat100[,1], type = "l", ylim = c(0, max(Y_by_ind_mat100)), col = 1, xlab = "Year",ylab = "Final Demand Germany [Billion €]")
+for(i in c(2:5)){
+  lines(c(years_obs,years_new), Y_by_ind_mat100[,i], col= rainbow(7)[i])
+}
+legend(2025, 150, legend = colnames(Y_by_ind_mat100), col = rainbow(7, alpha = 1)
+, lty = 1, bg = "white", box.col  = "white")
+industries_realnames[which(colnames(Y_by_ind_mat100) == colnames(Y_by_ind_mat))]
+```
+

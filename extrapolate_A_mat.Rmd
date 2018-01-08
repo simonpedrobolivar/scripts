@@ -1,0 +1,242 @@
+---
+title: "extrapolate_A_mat"
+author: "Simon Schulte"
+date: "29 November 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# load packages
+```{r}
+library(xlsx)
+library(data.table)
+require(devtools)
+install_github('simonpedrobolivar/masterthesis/MRIOtools')
+require(MRIOtools)
+library(parallel)
+library(RColorBrewer)
+require(gdata)
+require(psych)
+library(foreach)
+library(doParallel)
+```
+
+
+# setting the constant parameters
+```{r parameters}
+colors <- brewer.pal(12, "Set3") # colors for plots
+n_ind <- 163 # number of industries
+n_countries <- 49 # number of countries (40 + 1 RoW)
+years_obs <- 1995:2011 # years for which IO table exists
+n_years_obs <- length(years_obs)
+years_est <- c(2020, 2030)
+n_years_est <- length(years_est)
+years <- c(years_obs, years_est)
+n_FDcat <- 4 # final demand sectors (household, non-gov, gov, capital formation)
+n_GHGs <- 4 # number of relevant GHGs (CO2, CH4, N2O, SF6)
+
+
+path4plots <- "/home/simon/Dokumente/Master/master_thesis/figures/"
+path2data <-"/media/simon/dateien/master_thesis_data/"#  "/media/simon/Elements1/EXIOBASEv3_txt/Extrapolations/A_matrix/"
+```
+
+
+# load data
+```{r}
+setwd(path2data)
+files = list.files(pattern="A_")[1:length(years_obs)]
+A_obs_list <- lapply(files, function(x) fread(x, sep = ",", select = 1)) # read the files. List of data.tables. Each element of the list represents ONE year. 
+#setwd("~/Dokumente/Master/master_thesis/Results/MRIO_Results/Timeseries 1995 – 2015_2017_11_20__19_16_11")
+#files = list.files(pattern="Midpoint footprints, Germany")
+#A_names <- fread(files[1], sep = "\t", header = T, select = c(1,2), skip = 0)
+
+dim(A_obs_list[[1]]) # check data
+col.list <- A_obs_list
+
+```
+
+# analyse data
+```{r}
+setwd("~/Dokumente/Master/master_thesis/Results/MRIO_Results/Timeseries 1995 – 2015_2017_11_20__19_16_11")
+files = list.files(pattern="Midpoint footprints, Germany")
+A_names <- fread(files[1], sep = "\t", header = T, select = c(1,2), skip = 0)
+DEU_i <- 816:(816 + 162) # indices of german industries
+electr_i <- 911:922 # indices of electricity sectors in germany
+
+setwd(path2data)
+files = list.files(pattern="A_")[1:length(years_obs)]
+A_obs_list2check <- lapply(files, function(x) fread(x, sep = ",", select = DEU_i, verbose = F)) # read the files.
+temp <- A_obs_list2check
+A_obs_list2check <- lapply(A_obs_list2check, function(x) setnames(x, A_names[Country == "Germany"]$Industry)) # set colnames
+A_obs_list2check <- lapply(A_obs_list2check, function(x) cbind(A_names, x)) # add column for industry and country
+names(A_obs_list2check) <- years_obs
+
+A_obs_list2check[[1]][,1:5]
+
+A_obs_dt2check <- rbindlist(A_obs_list2check, idcol = T)
+dim(A_obs_dt2check)
+A_obs_dt2check[,1:5]
+setnames(A_obs_dt2check, ".id", "Year")
+```
+
+## plot
+```{r}
+for(i in 4:166){ 
+   plot(years_obs, unlist(A_obs_dt2check[Country == "Germany" & Industry == "Production of electricity by coal", i, with = F]), col = 1, type = "l", las = 2, xaxt = "n", ylab = "")
+  axis(1, years_obs, las = 2)
+  legend("topright", legend = A_names[Country == "Germany"]$Industry[i], bg = "white")
+  readline(prompt="Press [enter] to continue")
+}
+```
+
+## check correlations
+```{r}
+electr_names <- A_names[electr_i]$Industry
+
+# how are inputs of different electricity sectors into ONE industrial sectors correlated?
+ts_elect <- list()
+for(i in 1:length(electr_names)){
+  ts_elect[[i]] <- A_obs_dt2check[Industry == electr_names[i] & Country == "Germany"]
+}
+names(ts_elect) <- electr_names
+pairs.panels(as.data.table(sapply(ts_elect, "[", ,64)))
+
+# how is are the inputs of ONE industry into other industries correlated?
+ts <- A_obs_dt2check[Industry == electr_names[1] & Country == "Germany"]
+dim(ts)
+
+pairs.panels(ts[,4:12])
+```
+
+
+
+
+# extrapolate A
+```{r}
+A_est_list <- extrapolate_matrix(A_obs_list, years.est = years_est, years.obs = years_obs, parallel = T, n.cores = 3)
+A_list <- c(A_obs_list, A_est_list)
+#A_list <- A_obs_list
+names(A_list) <- years
+```
+
+# write new A matrices
+```{r}
+for(i in 1:length(years_est)){
+  write.table(A_est_list[[i]], paste0(path2data, "A_", years_est[i], ".txt"), row.names = F, col.names = F, sep = "\t") 
+}
+```
+
+
+# moving window approach
+
+```{r}
+setwd(path2data)
+files = list.files(pattern="A_")[1:length(years_obs)]
+A_est_list <- list()
+index = c(1, seq(100, 7900, 100), n_countries * n_ind + 1) # 1 bis 6 durchgelaufen
+for(i in 1:(length(index)-1)){
+  print(paste("Read column", i))
+  A_obs_list <- lapply(files, function(x) fread(x, sep = ",", select = index[i]:(index[i+1]-1), verbose = F)) # read the files. 
+  print("extrapolation")
+  temp <- extrapolate_A_mat(A_obs_list, years.est = years_est, years.obs = years_obs, parallel = T, n.cores = 3)
+  if(i == 1){
+    A_est_list <- temp
+  }else A_est_list <- Map(cbind, A_est_list, temp) # bind new set of columns (one column for each year) to each data.frame
+  rm(A_obs_list, temp)
+}
+length(A_est_list)
+dim(A_est_list[[1]])
+save(A_est_list, file = paste0(path2data, "A_est_list.RData"))
+```
+
+
+
+
+# validate forecasts
+### unscaled
+```{r}
+setwd(path2data)
+files = list.files(pattern="A_")[1:length(years_obs)]
+A_mat <- fread(paste0("A_2011.csv"))
+# calculate largest flows: 
+
+A_ranks <- frankv(A_mat)
+frankv(-A_mat[,3])
+length(A_ranks)
+A_ranks <- A_mat[,lapply(-.SD, frankv)] # ranks for each column of A. 1 is largest flow, 2 2nd largest , etc. 
+dim(A_ranks)
+
+index = c(1, seq(100, 7900, 100), n_countries * n_ind + 1) 
+
+models <- c("glm", "glm2", "glm3") # model types
+A_valid_list <- list() # list to store results of validation
+for(i in 1:(length(index)-1)){
+  for(j in 1:length(models)){
+    starttime <- Sys.time()
+    cat("---------------------", "\n")
+    cat("Run", i * j, "(out of ", length(index) * length(models), ")\n")
+    readfun <- function(x){
+      fread(x, sep = ",", select = index[i]:(index[i+1]-1), verbose = F) # load 100 cols of A
+    }
+    A_obs_list <- lapply(files, readfun) # read the files. 
+    model_name <- paste0("A_valid_", models[j])
+    # set up cluster
+    cl <- parallel::makeCluster(2)
+    doParallel::registerDoParallel(cl)
+    temp_list <- list()
+    # start parallelised for-loop
+    temp_list[[j]] <- foreach::foreach(i = 1:ncol(A_obs_list[[1]]), .combine = c) %dopar%{
+      
+      validate_forecast(A_obs_list[which(A_ranks[,i] < 101),i], year.split = 2000, years.obs = years_obs, parallel = F, n.cores = 3, type = models[j], scale = F)
+    }
+    
+    # stop cluster, free memory form workers
+    parallel::stopCluster(cl = cl) 
+    A_valid_list <- lapply(A_valid_list, function(x) rbind(A_valid_list, x))
+    cat("Time needed:", Sys.time() - starttime, "\n")
+  }
+}
+    save(A_valid_list, file = paste0("/home/simon/Dokumente/Master/master_thesis/scripts/R/data/A_valid_list.RData"))
+  
+```
+
+### scaled
+```{r}
+models <- c("glm", "glm2", "glm3") # model types
+for(i in 1:length(models)){
+  model_name <- paste0("S_valid_", models[i])
+  temp <- validate_forecast(S_obs_list, year.split = 2000, years.obs = years_obs, parallel = T, n.cores = 3, type = models[i], scale = T)
+  save(temp, file = paste0("/home/simon/Dokumente/Master/master_thesis/scripts/R/data/", model_name, ".RData"))
+  rm(temp)
+}
+```
+
+
+
+
+
+
+
+
+# test fread()
+```{r}
+# from external HD
+system.time(
+a <- fread("A_1995.csv", sep = ",")
+) # 38 sec
+system.time(
+a <- fread("A_1995.csv", sep = ",", select = 1)
+) # 34 sec
+# from SSD
+setwd("/home/simon/Dokumente/Master/master_thesis/data/extrapolations")
+system.time(
+a <- fread("A_1995.csv", sep = ",")
+) # 16 sec
+system.time(
+a <- fread("A_1995.csv", sep = ",", select = 1)
+) # 3.6 sec
+```
+

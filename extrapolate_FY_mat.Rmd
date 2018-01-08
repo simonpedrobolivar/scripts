@@ -1,0 +1,147 @@
+---
+title: "extrapolate_FY_mat"
+author: "Simon Schulte"
+date: "30 November 2017"
+output: html_document
+---
+
+# load packages
+```{r}
+library(xlsx)
+library(data.table)
+require(devtools)
+install_github('simonpedrobolivar/masterthesis/MRIOtools')
+require(MRIOtools)
+library(parallel)
+library(RColorBrewer)
+require(gdata)
+```
+
+
+# setting the constant parameters
+```{r parameters}
+colors <- brewer.pal(12, "Set3") # colors for plots
+n_ind <- 163 # number of industries
+n_countries <- 49 # number of countries (40 + 1 RoW)
+years_obs <- 1995:2011 # years for which IO table exists
+n_years_obs <- length(years_obs)
+years_est <- c(2020, 2030)
+n_years_est <- length(years_est)
+years <- c(years_obs, years_est)
+n_FDcat <- 4 # final demand sectors (household, non-gov, gov, capital formation)
+n_GHGs <- 4 # number of relevant GHGs (CO2, CH4, N2O, SF6)
+
+
+path4plots <- "/home/simon/Dokumente/Master/master_thesis/figures/"
+path2data <- "/media/simon/Elements1/EXIOBASEv3_txt/Extrapolations/FY_matrix/"
+```
+
+
+# load data
+```{r}
+setwd(path2data)
+files = list.files(pattern="FY_")[1:n_years_obs]
+FY_obs_list <- lapply(files, function(x) fread(x, sep = ",")) # read the files. List of data.tables. Each element of the list represents ONE year. 
+dim(FY_obs_list[[1]]) # check data
+
+```
+
+
+# extrapolate FY
+```{r}
+FY_est_list <- extrapolate_matrix(FY_obs_list, years.est = years_est, years.obs = years_obs, parallel = F, n.cores = 3)
+FY_list <- c(FY_obs_list, FY_est_list)
+#FY_list <- FY_obs_list
+names(FY_list) <- years
+```
+
+# write new FY matrices
+```{r}
+for(i in 1:length(years_est)){
+  write.table(FY_est_list[[i]], paste0(path2data, "FY_", years_est[i], ".txt"), row.names = F, col.names = F, sep = "\t") 
+}
+```
+
+
+# analyze FY extrapolations
+```{r}
+setwd(path2data)
+list <- t(sapply(FY_list, colSums))
+plot(years, list[1,], type = "l")
+stacked_area_plot(list, agg = F, agg.level = 7, colorvec = colors, yaxt.steps = 10000, xaxt.steps = 5, legend.pos = "topleft", ylab = "CO2-eq [Mt]", ylim.adjust = 150, legend.ncol = 3)
+```
+
+# validate forecasts
+### scaled
+#### glm1
+
+```{r}
+if(!exists("FY_valid_scaled_glm1")){
+  try(load("/home/simon/Dokumente/Master/master_thesis/scripts/R/data/FY_validation_scaled_glm1.RData"))
+  if(!exists("FY_valid_scaled_glm1")){
+    FY_valid_scaled_glm1 <- validate_forecast(FY_obs_list, year.split = 2000, years.obs = years_obs, parallel = T, n.cores = 3, type = "glm1", scale = T)
+    save(FY_valid_scaled_glm1, file = "/home/simon/Dokumente/Master/master_thesis/scripts/R/data/FY_validation_scaled_scaled_glm1.RData")
+  }
+}
+```
+
+#### glm2
+```{r}
+if(!exists("FY_valid_scaled_glm2")){
+  try(load("/home/simon/Dokumente/Master/master_thesis/scripts/R/data/FY_validation_scaled_glm2.RData"))
+  if(!exists("FY_valid_scaled_glm2")){
+    FY_valid_scaled_glm2 <- validate_forecast(FY_obs_list, year.split = 2000, years.obs = years_obs, parallel = T, n.cores = 3, type = "glm2", scale = T)
+    save(FY_valid_scaled_glm2, file = "/home/simon/Dokumente/Master/master_thesis/scripts/R/data/FY_validation_scaled_scaled_glm2.RData")
+  }
+}
+```
+
+#### glm3
+```{r}
+if(!exists("FY_valid_scaled_glm3")){
+  try(load("/home/simon/Dokumente/Master/master_thesis/scripts/R/data/FY_validation_scaled_glm3.RData"))
+  if(!exists("FY_valid_scaled_glm3")){
+    FY_valid_scaled_glm3 <- validate_forecast(FY_obs_list, year.split = 2000, years.obs = years_obs, parallel = T, n.cores = 3, type = "glm3", scale = T)
+    save(FY_valid_scaled_glm3, file = "/home/simon/Dokumente/Master/master_thesis/scripts/R/data/FY_validation_scaled_scaled_glm3.RData")
+  }
+}
+```
+
+
+
+### unscaled
+#### glm1
+```{r}
+if(!exists("FY_valid_glm1")){
+  try(load("/home/simon/Dokumente/Master/master_thesis/scripts/R/data/FY_validation_glm1.RData"))
+  if(!exists("FY_valid_glm1")){
+    FY_valid_glm1 <- validate_forecast(FY_obs_list, year.split = 2000, years.obs = years_obs, parallel = T, n.cores = 3, type = "glm", scale = F)
+    save(FY_valid_glm1, file = "/home/simon/Dokumente/Master/master_thesis/scripts/R/data/FY_validation_glm1.RData")
+  }
+}
+```
+
+
+#### glm2
+```{r}
+if(!exists("FY_valid_glm2")){
+  try(load("/home/simon/Dokumente/Master/master_thesis/scripts/R/data/FY_validation_glm2.RData"))
+  if(!exists("FY_valid_glm2")){
+    FY_valid_glm2 <- validate_forecast(FY_obs_list, year.split = 2000, years.obs = years_obs, parallel = T, n.cores = 3, type = "glm2", scale = F)
+    save(FY_valid_glm2, file = "/home/simon/Dokumente/Master/master_thesis/scripts/R/data/FY_validation_glm2.RData")
+  }
+}
+```
+
+#### glm3
+```{r}
+if(!exists("FY_valid_glm3")){
+  try(load("/home/simon/Dokumente/Master/master_thesis/scripts/R/data/FY_validation_glm3.RData"))
+  if(!exists("FY_valid_glm3")){
+    FY_valid_glm3 <- validate_forecast(FY_obs_list, year.split = 2000, years.obs = years_obs, parallel = T, n.cores = 3, type = "glm3", scale = F)
+    save(FY_valid_glm3, file = "/home/simon/Dokumente/Master/master_thesis/scripts/R/data/FY_validation_glm3.RData")
+  }
+}
+```
+
+

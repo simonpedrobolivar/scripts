@@ -1,0 +1,66 @@
+---
+title: "get_largest_flows"
+author: "Simon Schulte"
+date: "19 Dezember 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# load data
+```{r}
+setwd("/media/simon/Elements1/EXIOBASEv3_txt/EX3_3_constant/EX3_3_constant_ixi/2011")
+Z_mat <- fread("Z.txt", sep = "\t", drop = c(1,2), skip = 3)
+dim(Z_mat)
+test <- Z_mat[1:5, 1:5]
+rank.z <- (matrix(ncol = 7987, nrow = 7987))
+rank.test[] <- rank(test)
+which(rank.test %in% 23:25)
+rank(test)
+frankv(test, cols = 1:2)
+frank(as.data.table(unlist(test)))
+```
+
+
+# get largest flows
+```{r}
+rank.z <- (matrix(ncol = 7987, nrow = 7987))
+rank.z[] <- rank(as.matrix(Z_mat))
+rank.z[1:5, 1:5]
+
+rank.z <- as.data.table(rank.z)
+indices <- which(rank.z %in% c((7987*7987-100):(7987*7987)))
+max(rank.z)
+
+```
+
+
+
+# trying bigmemory package
+```{r}
+library(bigmemory)
+setwd("/media/simon/Elements1/EXIOBASEv3_txt/EX3_3_constant/EX3_3_constant_ixi/2011")
+Z_mat <- read.big.matrix("Z.txt", sep = "\t",  skip = 3, type ="double")
+Z_mat[1:5, 1:5]
+Z_mat <- Z_mat[,-c(1,2)]
+
+largest_flows <- matrix(ncol = 2, nrow = 100)
+for(i in 1:100){
+   largest_flows[i,] <- which(Z_mat == max(Z_mat, na.rm = T), arr.ind = T)
+   Z_mat[largest_flows[i,1], largest_flows[i,2]] <- NA
+   cat(i, "")
+}
+names <- cbind("Index" = 1:7987, S_names)
+names[largest_flows[,1],]
+
+
+```
+
+
+
+
+
+
+

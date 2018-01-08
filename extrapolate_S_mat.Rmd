@@ -1,0 +1,272 @@
+---
+title: "extrapolate_S_mat"
+author: "Simon Schulte"
+date: "22 November 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+# load packages
+```{r}
+library(xlsx)
+library(data.table)
+require(devtools)
+install_github('simonpedrobolivar/masterthesis/MRIOtools')
+require(MRIOtools)
+library(parallel)
+library(RColorBrewer)
+require(gdata)
+```
+
+
+# setting the constant parameters
+```{r parameters}
+colors <- brewer.pal(12, "Set3") # colors for plots
+n_ind <- 163 # number of industries
+n_countries <- 49 # number of countries (40 + 1 RoW)
+years_obs <- 1995:2011 # years for which IO table exists
+n_years_obs <- length(years_obs)
+years_est <- c(2020, 2030)
+years <- c(years_obs, years_est)
+n_FDcat <- 4 # final demand sectors (household, non-gov, gov, capital formation)
+n_GHGs <- 4 # number of relevant GHGs (CO2, CH4, N2O, SF6)
+
+
+stressors_vec = read.xls("/home/simon/Dokumente/Master/master_thesis/Calculation/MRIO_Config.xlsx", sheet = 3, header = T, skip = 1)$stressor
+GHG_indices <- c(27 , 28  ,29 , 71  ,72 , 73  ,74 , 75  ,76 , 77  ,78 , 96  ,97 ,427 ,428 ,429 ,430 ,431 ,433 ,439 ,441, 442)
+GHG_names <- as.character(stressors_vec[GHG_indices])
+path4plots <- "/home/simon/Dokumente/Master/master_thesis/figures/"
+path2data <- "~/Dokumente/Master/master_thesis/data/EB3/Scenario_4/"
+```
+
+
+# load data
+```{r}
+setwd(path2data)
+files = list.files(pattern="S_")[1:length(years_obs)]
+S_obs_list <- lapply(files, function(x) fread(x, sep = ",")) # read the files. List of data.tables. Each element of the list represents ONE year. 
+setwd("~/Dokumente/Master/master_thesis/Results/MRIO_Results/Timeseries 1995 – 2015_2017_11_20__19_16_11")
+files = list.files(pattern="Midpoint footprints, Germany")
+S_names <- fread(files[1], sep = "\t", header = T, select = c(1,2), skip = 0)
+
+dim(S_obs_list[[1]]) # check data
+```
+
+# check timeseries
+```{r}
+S_obs_list2check <- lapply(S_obs_list, function(x) as.data.table(t(x))) # transpose
+S_obs_list2check <- lapply(S_obs_list2check, function(x) setnames(x, GHG_names)) # set colnames
+S_obs_list2check <- lapply(S_obs_list2check, function(x) cbind(S_names, x)) # add column for industry and country
+```
+
+
+## trend analysis
+```{r}
+total_em_list <- sapply(S_obs_list2check, function(x) colSums(x[,-c(1,2)]))
+
+barplot(total_em_list, legend.text = F, col = colors, ylim = c(0, 6e10), names.arg = years_obs)
+legend("topright", legend = GHG_names, fill = colors, ncol = 2, cex = 0.5)
+
+# same only weighted according to GWP100
+total_gwp_mat <- apply(total_em_list, 2, function(x) ifelse(substr(rownames(total_em_list), 1, 3) == "CH4", x * 25, ifelse(substr(rownames(total_em_list), 1, 3) == "N20", x * 298, 
+ifelse(substr(rownames(total_em_list), 1, 3) == "SF6", x * 22800, x)))) 
+
+barplot(total_gwp_mat, legend.text = F, col = colors, ylim = c(0, 6e10), names.arg = years_obs)
+legend("topright", legend = GHG_names, fill = colors, ncol = 2, cex = 0.5)
+```
+Was auffällt: 
+- light increase from 2007 to 2011
+- sharp decline from 1998 to 1999 (almost halbiert)
+- co2 combustion air mit abstand der relevanteste emissionsquelle
+
+## GER industries (co2 combustion air)
+```{r}
+S_obs_GER <- sapply(S_obs_list2check, function(x) x[Country == "Germany"]$`CO2 - combustion - air`)
+colnames(S_obs_GER) <- years_obs
+S_obs_GER_scaled <- t(scaleTo100(t(S_obs_GER), 1995))
+S_obs_GER_scaled[is.nan(S_obs_GER_scaled)] <- 0
+S_obs_GER_scaled[is.infinite(S_obs_GER_scaled)] <- NA
+
+for(i in 1:163){ 
+   plot(years_obs, S_obs_GER_scaled[i,], col = i, type = "l", las = 2, xaxt = "n")
+  axis(1, years_obs, las = 2)
+  legend("topright", legend = S_names[Country == "Germany"]$Industry[i], bg = "white")
+  readline(prompt="Press [enter] to continue")
+}
+
+for(i in 1:163){ 
+  plot(years_obs, S_obs_GER[i,], col = i, type = "l", las = 2, xaxt = "n")
+  axis(1, years_obs, las = 2)
+  legend("topright", legend = S_names[Country == "Germany"]$Industry[i], bg = "white")
+  print(S_obs_GER[i,])
+  readline(prompt="Press [enter] to continue")
+}
+```
+was auffällt: 
+- some industries have same form of timeseries, only on different level (probably due to desaggregation)
+- some industries have weird declines/increases, especially the agricultural sector. (e.g. Cultivation of oil seeds)
+
+
+# extrapolate S
+```{r}
+S_est_list <- extrapolate_matrix(S_obs_list, years.est = years_est, years.obs = years_obs, parallel = T, n.cores = 3)
+S_list <- c(S_obs_list, S_est_list)
+#S_list <- S_obs_list
+names(S_list) <- years
+```
+
+# write new S matrices
+```{r}
+for(i in 1:length(years_est)){
+  write.table(S_est_list[[i]], paste0(path2data, "S_", years_est[i], ".txt"), row.names = F, col.names = F, sep = "\t") 
+}
+```
+
+
+
+
+
+# analyse resulting S matrices
+ TODO
+
+```{r}
+S_list <- lapply(S_list, function(x) cbind(GHG_names, x))
+S_dt <- rbindlist(S_list, idcol = T)
+S_dt[1:10, 1:10]
+setnames(S_dt, ".id", "Year")
+
+names <- names(S_dt)[-c(1,2)]
+S_byGHG <- S_dt[,sum(names), by = .(GHG_names, Year)]
+
+S_byIndustry <- S_dt[,sum(Households, NPISH, Government, GFCF), by = .(Year, Industry)]
+
+#fd_names <- names(S_dt)[-c(1,2,3)]
+S_byFDcat_Households <- S_dt[,sum(Households), by = .(Year)]
+S_byFDcat_NPISH <- S_dt[,sum(NPISH), by = .(Year)]
+S_byFDcat_Government <- S_dt[,sum(Government), by = .(Year)]
+S_byFDcat_GFCF <- S_dt[,sum(GFCF), by = .(Year)]
+#S_byFDcat_Exports <- S_dt[,sum(`Exports: Total (fob)`), by = .(Year)]
+
+S_byFDcat <- merge(merge(S_byFDcat_Households, S_byFDcat_NPISH, by = "Year"), merge(S_byFDcat_Government, S_byFDcat_GFCF, by = "Year"), by = "Year")
+names(S_byFDcat) <- colnames
+S_byFDcat_mat <- apply(as.matrix(S_byFDcat), c(1,2), as.numeric)
+rownames(S_byFDcat_mat) <- S_byFDcat_mat[,1]
+S_byFDcat_mat <- S_byFDcat_mat[,-1]
+```
+
+## plots
+```{r}
+pdf(paste0(path4plots, "S_byFDcat_wGDP.pdf"))
+stacked_area_plot(S_byFDcat_mat/1E3, agg = F, agg.level = 7, colorvec = colors, yaxt.steps = 500, xaxt.steps = 5, legend.pos = "topleft", ylab = "Final Demand GER [Billion EUR]", ylim.adjust = 150, legend.ncol = 1)
+lines(GDP_DEU)
+lines(years_obs, GDP_DEU_without_netExport)
+legend(x = 2000, y = 3200, legend = "GDP (source: World Bank)", lty = 1, lwd = 2, box.col = "white", bg = "white")
+dev.off()
+```
+
+
+# validate forecasts
+### unscaled
+```{r}
+models <- c("glm", "glm2", "glm3") # model types
+for(i in 1:length(models)){
+  model_name <- paste0("S_valid_scaled_", models[i])
+  temp <- validate_forecast(S_obs_list, year.split = 2000, years.obs = years_obs, parallel = T, n.cores = 3, type = models[i], scale = F)
+  save(temp, file = paste0("/home/simon/Dokumente/Master/master_thesis/scripts/R/data/", model_name, ".RData"))
+  rm(temp)
+  cat("", i)
+}
+```
+
+### scaled
+```{r}
+models <- c("glm", "glm2", "glm3") # model types
+for(i in 1:length(models)){
+  model_name <- paste0("S_valid_", models[i])
+  temp <- validate_forecast(S_obs_list, year.split = 2000, years.obs = years_obs, parallel = T, n.cores = 3, type = models[i], scale = T)
+  save(temp, file = paste0("/home/simon/Dokumente/Master/master_thesis/scripts/R/data/", model_name, ".RData"))
+  rm(temp)
+}
+```
+
+
+#### glm1
+```{r}
+if(!exists("S_valid_scaled_glm1")){
+  try(load("/home/simon/Dokumente/Master/master_thesis/scripts/R/data/S_validation_glm1.RData"))
+  if(!exists("S_valid_glm1")){
+    S_valid_scaled_glm1 <- validate_forecast(S_obs_list, year.split = 2000, years.obs = years_obs, parallel = T, n.cores = 3, type = "glm", scale = T)
+    save(S_valid_scaled_glm1, file = "/home/simon/Dokumente/Master/master_thesis/scripts/R/data/S_validation_scaled_glm1.RData")
+  }
+}
+rm(S_valid_scaled_glm1)
+```
+
+#### glm2
+```{r}
+if(!exists("S_valid_scaled_glm2")){
+  try(load("/home/simon/Dokumente/Master/master_thesis/scripts/R/data/S_validation_glm2.RData"))
+  if(!exists("S_valid_glm2")){
+    S_valid_glm2 <- validate_forecast(S_obs_list, year.split = 2000, years.obs = years_obs, parallel = T, n.cores = 3, type = "glm2", scale = T)
+    save(S_valid_glm2, file = "/home/simon/Dokumente/Master/master_thesis/scripts/R/data/S_validation_scaled_glm2.RData")
+  }
+}
+rm(S_valid_glm2)
+```
+
+#### glm3
+```{r}
+if(!exists("S_valid_glm3")){
+  try(load("/home/simon/Dokumente/Master/master_thesis/scripts/R/data/S_validation_glm3.RData"))
+  if(!exists("S_valid_glm3")){
+    S_valid_glm3 <- validate_forecast(S_obs_list, year.split = 2000, years.obs = years_obs, parallel = T, n.cores = 3, type = "glm3", scale = T)
+    save(S_valid_glm3, file = "/home/simon/Dokumente/Master/master_thesis/scripts/R/data/S_validation_scaled_glm3.RData")
+  }
+}
+rm(S_valid_glm3)
+```
+
+
+### unscaled
+#### glm1
+```{r}
+if(!exists("S_valid_glm1")){
+  try(load("/home/simon/Dokumente/Master/master_thesis/scripts/R/data/S_validation_glm1.RData"))
+  if(!exists("S_valid_glm1")){
+    S_valid_glm1 <- validate_forecast(S_obs_list, year.split = 2000, years.obs = years_obs, parallel = T, n.cores = 3, type = "glm", scale = F)
+    save(S_valid_glm1, file = "/home/simon/Dokumente/Master/master_thesis/scripts/R/data/S_validation_glm1.RData")
+  }
+}
+```
+
+#### glm2
+```{r}
+if(!exists("S_valid_glm2")){
+  try(load("/home/simon/Dokumente/Master/master_thesis/scripts/R/data/S_validation_glm2.RData"))
+  if(!exists("S_valid_glm2")){
+    S_valid_glm2 <- validate_forecast(S_obs_list, year.split = 2000, years.obs = years_obs, parallel = T, n.cores = 3, type = "glm2", scale = F)
+    save(S_valid_glm2, file = "/home/simon/Dokumente/Master/master_thesis/scripts/R/data/S_validation_glm2.RData")
+  }
+}
+```
+
+#### glm3
+```{r}
+if(!exists("S_valid_glm3")){
+  try(load("/home/simon/Dokumente/Master/master_thesis/scripts/R/data/S_validation_glm3.RData"))
+  if(!exists("S_valid_glm3")){
+    S_valid_glm3 <- validate_forecast(S_obs_list, year.split = 2000, years.obs = years_obs, parallel = T, n.cores = 3, type = "glm3", scale = F)
+    save(S_valid_glm3, file = "/home/simon/Dokumente/Master/master_thesis/scripts/R/data/S_validation_glm3.RData")
+  }
+}
+```
+
+
+
+
+
