@@ -112,7 +112,7 @@ dev.off()
 require(mgcv)
 # get timeseries for tests
 Y_names <- cbind(Y_names, Index = 1:7987)
-Y_names[Country == "Germany" & Industry == "Production of electricity by wind"]$Index # 915 for wind
+Y_names[Country == "Germany" & Industry == "Production of electricity by coal"]$Index # 915 for wind
 ts <- as.numeric(sapply(Y_obs_list, "[", 915 , 1))
 plot(years_obs, ts, type = "l")
 
@@ -206,8 +206,10 @@ acf(resid(fm), main="acf(resid(fm))")
 acf(resid(fm3p1q1$lme), main="acf(resid(fm3p1q1))")
 
 
+###################################
+# testing gam #####
+###################################
 
-# testing gam
 fm3p1q1 <- gamm(ts ~ s(years_obs, bs = "cr"),
           correlation = corARMA(form = ~ 1|years_obs, p = 1, q = 1))
 preds <- predict(fm3p1q1$gam, newdata = data.frame("years_obs" = years), se.fit = T)
@@ -221,9 +223,51 @@ abline(v = c(2020, 2030), lty = 2, col = "grey30")
 abline(h = c(preds$fit[18], preds$fit[19]), lty = 2, col = "grey30")
 points(c(2020, 2030), c(preds$fit[18], preds$fit[19]), col = "darkgreen", lwd = 3)
 
-# test LASSO (glmnet)
+###################################
+# test LASSO (glmnet) #####
+###################################
 require(glmnet)
 fm_glmnet <- glmnet(ts, years_obs)
+
+###################################
+##### test hts package #####
+###################################
+library(hts)
+## 1. create a grouped time series (function gts)
+?gts
+ts_mat <- matrix(ncol = length(911:922), nrow = n_years_obs)
+for(i in 911:922) {
+  ts_mat[,i-910] <- as.numeric(sapply(Y_obs_list, "[", i , 2))
+  print(i)
+}
+
+ts_mat <- matrix(unlist(sapply(Y_obs_list, "[", 911:922 , 1)), nrow = n_years_obs, byrow = T)
+
+ts_mat_gts <- gts(ts_mat)
+plot.gts(ts_mat_gts)
+plot(ts_mat[,1], col = 1, type = "l", ylim = c(0, max(ts_mat)))
+for(i in 2:12) lines(ts_mat[,i], col = i)
+## 2. forecast
+fc <- forecast(ts_mat_gts, h = 10 )
+plot(fc)
+
+fc$bts
+fc$histy
+fc$groups
+
+## 3. test forecast accuracy
+data <- window(ts_mat_gts, start = 1, end = 10)
+test <- window(ts_mat_gts, start = 11, end = 17)
+fc_cv <- forecast(data, h = 7)
+accuracy.gts(fc_cv, test)
+
+
+
+###########################################
+#### test multivariate-time-series-analysis (mts package) ####
+###########################################
+require(MTS)
+BVAR(ts_mat, p = 1, include.mean = F)
 ```
 
 

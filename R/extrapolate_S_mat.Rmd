@@ -53,7 +53,7 @@ S_obs_list <- lapply(files, function(x) fread(x, sep = ",")) # read the files. L
 setwd("~/Dokumente/Master/master_thesis/Results/MRIO_Results/Timeseries 1995 – 2015_2017_11_20__19_16_11")
 files = list.files(pattern="Midpoint footprints, Germany")
 S_names <- fread(files[1], sep = "\t", header = T, select = c(1,2), skip = 0)
-
+country_names <- unique(S_names$Country)
 dim(S_obs_list[[1]]) # check data
 ```
 
@@ -110,6 +110,106 @@ for(i in 1:163){
 was auffällt: 
 - some industries have same form of timeseries, only on different level (probably due to desaggregation)
 - some industries have weird declines/increases, especially the agricultural sector. (e.g. Cultivation of oil seeds)
+
+## time-series for same industries
+```{r}
+S_obs_byIndustry <-  sapply(S_obs_list2check, function(x) x[Industry == "Manufacture of basic iron and steel and of ferro-alloys and first products thereof"]$`CO2 - combustion - air`)
+S_obs_byIndustry_ts <- ts(t(S_obs_byIndustry), start = years_obs[1], end = years_obs[17], names = country_names)
+var_coef_fun <- function(ts) sd(ts) / mean(ts)
+var_coef <- apply(S_obs_byIndustry_ts, 2, var_coef_fun)
+
+
+#min <- min(S_obs_byIndustry_ts[,which(var_coef < 0.3)])
+min <- min(S_obs_byIndustry_ts[which(S_obs_byIndustry_ts != 0)])
+
+max <- max(S_obs_byIndustry_ts[,which(var_coef < 0.3)])
+
+
+#plot
+plot(S_obs_byIndustry_ts[,1], ylim = c(0, max(S_obs_byIndustry_ts)))
+abline(h = max, col = "grey", lty = 2)
+for(i in 2:n_countries) {
+  lines(S_obs_byIndustry_ts[,i], col = i)
+  legend("topleft", legend = country_names[i], col = i)
+  readline(prompt="Press [enter] to continue")
+}
+legend("topright", legend = country_names, col = 1:n_countries, pch = 0.7, ncol = 3)
+
+
+# a first try to scale time series
+scale_gts_fun <- function(gts){
+  min <- min(gts)
+  max <- max(gts)
+  res <- (gts - min) / (max - min)
+  attr(res, "scale:min") <- min
+  attr(res, "scale:max") <- max
+  return(res)
+  #(ts2 - min(ts)) / max(ts - min(ts))
+}
+unscale_gts_fun <- function(gts, min, max){
+  if("scale:min" %in% attributes(gts)$names) min <- attributes(gts)$'scale:min'
+  if("scale:max" %in% attributes(gts)$names) max <- attributes(gts)$'scale:max'
+  return(gts * (max - min) + min)
+ }
+gts_scaled <- scale_gts_fun(S_obs_byIndustry_ts)
+max(gts_scaled)
+attributes(gts_scaled)$'scale:max'
+
+round(unscale_gts_fun(gts_scaled) - gts, 10) # scale and unscale works ok. dif < 1e-9
+
+plot(gts_scaled[,1], ylim = c(0, max(gts_scaled)))
+abline(h = max, col = "grey", lty = 2)
+for(i in 2:n_countries) {
+  lines(gts_scaled[,i], col = i)
+  legend("topleft", legend = country_names[i], col = i)
+  readline(prompt="Press [enter] to continue")
+}
+
+ts(ts)
+(ts(ts))
+fitmodel_fun <- function(ts, years.obs, years.est){
+  fm <- glm(ts ~ years.obs + I(years.obs^2) + I(years.obs^3), family = gaussian(link = "logit"))
+  preds_scaled <- predict(fm, newdata = data.frame("years.obs" = years.est))
+  return(as.numeric((exp(preds_scaled)/(1+exp(preds_scaled)))))
+  
+}
+gts_new_scaled <- list()
+preds <- ts(matrix(ncol = n_countries, nrow = n_years_est), start = years_est[1], end = years_est[length(years_est)], frequency = 1/10, names = country_names)
+for(i in 1:n_countries){
+ preds[,i] <- fitmodel(gts_scaled[,i], years_obs, years_est)
+}
+
+plot(gts_scaled[,1], ylim = c(0, max(gts_scaled)), xlim = c(1995, 2030))
+for(i in 2:n_countries) {
+  lines(gts_scaled[,i], col = i)
+  points(preds[,i], pch = 16, col = i)
+  legend("topleft", legend = country_names[i], col = i)
+  readline(prompt="Press [enter] to continue")
+}
+
+                                     
+                              
+preds_unscaled <- unscale_gts_fun(preds, 
+                                  min = attributes(gts_scaled)$'scale:min', 
+                                  max = attributes(gts_scaled)$'scale:max')
+
+for(i in 1:n_countries) {
+  plot(gts[,i], ylim = c(0, max(c(gts[,i], preds_unscaled[,i]))), xlim = c(1995, 2030), main = country_names[i])
+  lines(preds_unscaled[,i])
+  readline(prompt="Press [enter] to continue")
+}
+
+plot(log(preds_unscaled[,1]), ylim = c(0, 1.1 * log(attributes(gts_scaled)$'scale:max')), type = "n")
+abline(h = log(attributes(gts_scaled)$'scale:max'), lty = 2)
+abline(h = 0, lty = 2)
+for(i in 1:n_countries){
+  points(log(preds_unscaled[,i]), col = i)
+}
+```
+
+
+
+
 
 
 # extrapolate S
@@ -193,6 +293,11 @@ for(i in 1:length(models)){
   rm(temp)
 }
 ```
+
+
+
+
+
 
 
 #### glm1

@@ -162,45 +162,63 @@ setwd(path2data)
 files = list.files(pattern="A_")[1:length(years_obs)]
 A_mat <- fread(paste0("A_2011.csv"))
 # calculate largest flows: 
-
-A_ranks <- frankv(A_mat)
-frankv(-A_mat[,3])
-length(A_ranks)
 A_ranks <- A_mat[,lapply(-.SD, frankv)] # ranks for each column of A. 1 is largest flow, 2 2nd largest , etc. 
 dim(A_ranks)
+rm(A_mat)
 
-index = c(1, seq(100, 7900, 100), n_countries * n_ind + 1) 
+index = c(1, seq(100, 7900, 100), n_countries * n_ind + 1) # bis i = 40 durchgelaufen
 
 models <- c("glm", "glm2", "glm3") # model types
-A_valid_list <- list() # list to store results of validation
+A_valid_list <- list("glm" = as.data.table(matrix(nrow = 0, ncol = 6)), 
+                     "glm2" = as.data.table(matrix(nrow = 0, ncol = 6)), 
+                     "glm3" = as.data.table(matrix(nrow = 0, ncol = 6))) # list to store results of validation
+A_valid_list <- lapply(A_valid_list, function(x) setnames(x, c(".id", "Year_split", "Year_forecast"        , "est",          "obs", "Column")))
+
 for(i in 1:(length(index)-1)){
-  for(j in 1:length(models)){
-    starttime <- Sys.time()
-    cat("---------------------", "\n")
-    cat("Run", i * j, "(out of ", length(index) * length(models), ")\n")
-    readfun <- function(x){
+  temp_list <- list()
+  starttime <- Sys.time()
+  cat("---------------------", "\n")
+  readfun <- function(x){
       fread(x, sep = ",", select = index[i]:(index[i+1]-1), verbose = F) # load 100 cols of A
     }
-    A_obs_list <- lapply(files, readfun) # read the files. 
+  A_obs_list <- lapply(files, readfun) # read the files. 
+  cat("Time required for reading A matrices:", Sys.time() - starttime, "\n")
+  for(j in 1:length(models)){
     model_name <- paste0("A_valid_", models[j])
+    cat("Run", i * j, "(out of ", length(index) * length(models), ")\n")
     # set up cluster
-    cl <- parallel::makeCluster(2)
+    cl <- parallel::makeCluster(3) # 3 cores
     doParallel::registerDoParallel(cl)
-    temp_list <- list()
+    
     # start parallelised for-loop
-    temp_list[[j]] <- foreach::foreach(i = 1:ncol(A_obs_list[[1]]), .combine = c) %dopar%{
-      
-      validate_forecast(A_obs_list[which(A_ranks[,i] < 101),i], year.split = 2000, years.obs = years_obs, parallel = F, n.cores = 3, type = models[j], scale = F)
-    }
+    temp_list[[j]] <- foreach::foreach(k = 1:ncol(A_obs_list[[1]]),
+                                       .combine = rbind, 
+                                       .packages = c("data.table", "MRIOtools")) %dopar%{
+                                         temp <- lapply(A_obs_list, 
+                                                        function(x) x[which(A_ranks[,k, with = F] < 101),k, with = F])
+                                         
+                                         if(sum(A_ranks[,k, with = F] < 101) > 0){
+                                           temp_dt <- validate_forecast(temp, 
+                                                                        year.split = 2000, 
+                                                                        years.obs = years_obs, 
+                                                                        parallel = F, n.cores = 3, 
+                                                                        type = models[j], scale = F)
+                                           rm(temp)
+                                           temp_dt <- temp_dt[, "Column" := rep(k + index[i] - 1, ncol(temp_dt))] # save number of column
+                                           return(temp_dt)
+                                           
+                                         }
+                                       }
     
     # stop cluster, free memory form workers
     parallel::stopCluster(cl = cl) 
-    A_valid_list <- lapply(A_valid_list, function(x) rbind(A_valid_list, x))
-    cat("Time needed:", Sys.time() - starttime, "\n")
   }
+  for(m in 1:length(models)) A_valid_list[[m]] <- rbind(A_valid_list[[m]], temp_list[[m]]) # actualize results
+  cat("Time needed for one run:", Sys.time() - starttime, "\n")
 }
-    save(A_valid_list, file = paste0("/home/simon/Dokumente/Master/master_thesis/scripts/R/data/A_valid_list.RData"))
-  
+
+
+save(A_valid_list, file = paste0("/home/simon/Dokumente/Master/master_thesis/scripts/R/data/A_valid_list_1_3900.RData"))
 ```
 
 ### scaled
