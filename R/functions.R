@@ -121,12 +121,16 @@ cv <- function(x, years.obs, year.split, type = "glm", ... ){
     }
     if(type == "gam1"){
       # TODO. not running yet
-      k <- length(ts.train) - 1
-      data <- data.frame("ts.train" = ts.train, "years.train" = years.train)
-      fm    <- gamm(ts.train ~ s(years.train, bs = "cr", k = k), data = data,
-                    correlation = corARMA(form = ~ 1|years.train, p = 1, q = 1))
-      preds <- as.numeric(predict(fm$gam,
-                                  newdata = data.frame("years.train" = years.obs[(n.years - n.years2model + i):n.years])))
+      if(sum(ts.train) == 0){
+        preds <- rep(0, length(years.obs[(n.years - n.years2model + i):n.years]))
+      }else{
+        k <- length(ts.train) - 1
+        data <- data.frame("ts.train" = ts.train, "years.train" = years.train)
+        fm    <- gamm(ts.train ~ s(years.train, bs = "cr", k = k), data = data,
+                      correlation = corARMA(form = ~ 1|years.train, p = 1, q = 1))
+        preds <- as.numeric(predict(fm$gam,
+                                    newdata = data.frame("years.train" = years.obs[(n.years - n.years2model + i):n.years])))
+      }
     }
     if(type == "ets"){
       fm <- ets(ts(ts.train,
@@ -245,6 +249,7 @@ validate_forecast <- function(mat.list, years.obs, year.split, parallel = F, n.c
     if(parallel == T){ # parallele compution on multiple cores
       # Initiate cluster
       cl <- parallel::makeCluster(n.cores, type = "FORK")
+      clusterCall(cl = cl, fun = library(mgcv))
       preds_dt <- rbindlist(parLapply(cl, 1:nrow(ts), function(x) cv(as.numeric(ts[x,]), years.obs = years.obs, year.split = year.split, type = type)), idcol = T)
       stopCluster(cl)
     }else{ # computation only on one single core
@@ -264,9 +269,10 @@ validate_forecast <- function(mat.list, years.obs, year.split, parallel = F, n.c
   return(preds_dt)
 }
 
+#validate_forecast(Y_obs_list, years_obs, 2000, parallel = T, n.cores = 3,
+                              type = "gam1", scale = T, progress.bar = T)
 
-
-
+#cv(rep(0, 17), 1:17, 6, type = "gam1")
 
 
 #' Returns a list containing the extrapolated matrices.

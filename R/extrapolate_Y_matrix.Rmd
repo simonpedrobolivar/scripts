@@ -115,7 +115,7 @@ require(mgcv)
 # get timeseries for tests
 Y_names <- cbind(Y_names, Index = 1:7987)
 Y_names[Country == "Germany" & Industry == "Production of electricity by coal"]$Index # 915 for wind
-ts <- as.numeric(sapply(Y_obs_list, "[", 915 , 1))
+ts <- as.numeric(sapply(Y_obs_list, "[", 911 , 1))
 plot(years_obs, ts, type = "l")
 
 # testing CV

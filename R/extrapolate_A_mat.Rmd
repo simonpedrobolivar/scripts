@@ -174,7 +174,7 @@ A_valid_list <- list("glm" = as.data.table(matrix(nrow = 0, ncol = 6)),
                      "glm3" = as.data.table(matrix(nrow = 0, ncol = 6))) # list to store results of validation
 A_valid_list <- lapply(A_valid_list, function(x) setnames(x, c(".id", "Year_split", "Year_forecast"        , "est",          "obs", "Column")))
 
-for(i in 1:(length(index)-1)){
+for(i in 41:(length(index)-1)){
   temp_list <- list()
   starttime <- Sys.time()
   cat("---------------------", "\n")
@@ -219,6 +219,7 @@ for(i in 1:(length(index)-1)){
 
 
 save(A_valid_list, file = paste0("/home/simon/Dokumente/Master/master_thesis/scripts/R/data/A_valid_list_1_3900.RData"))
+load("/home/simon/Dokumente/Master/master_thesis/scripts/R/data/A_valid_list_1_3900.RData")
 ```
 
 ### scaled
