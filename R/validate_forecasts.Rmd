@@ -1,0 +1,155 @@
+---
+title: "validate_forecasts"
+author: "Simon Schulte"
+date: "13 Januar 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# function to validate forecasts
+```{r}
+call_validate_forecast <- function(mat_obs_list, models, year.split, years.obs, parallel = F, n.cores, scale = F, path, overwrite = F, progress.bar = T){
+  for(i in 1:length(models)){
+    if(scale){
+      model_name <- paste0(substr(deparse(substitute(mat_obs_list)), 1, 1), "_valid_scaled_", models[i])
+    }else{
+      model_name <- paste0(substr(deparse(substitute(mat_obs_list)), 1, 1), "_valid_", models[i])
+    }
+    if(!overwrite & paste0(model_name, ".RData") %in% list.files(path)){
+      readline(prompt=paste0(model_name, ".RData already exists. Press [esc] to interupt. If you want to overwrite the file press [enter]"))
+    }
+    temp <- validate_forecast(mat_obs_list, year.split = year.split, years.obs = years.obs, parallel = parallel, n.cores = n.cores, type = models[i], scale = scale, progress.bar = progress.bar)
+    save(temp, file = paste0(path, model_name, ".RData"))
+    rm(temp)
+    cat("", i)
+  }
+}
+```
+
+# call function
+```{r}
+path <- "/home/simon/Dokumente/Master/master_thesis/scripts/R/data/"
+models <- "gam1"
+call_validate_forecast(Y_obs_list, models = models, year.split = 2000, years.obs = years_obs, path = path, parallel = T, n.cores = 3, scale = T, progress.bar = T)
+```
+
+
+
+# check outcome
+## load files
+```{r}
+Y_valid <- list()
+temp.space <- new.env()
+Y_valid[["data"]][["ets"]]  <- get(load(paste0(path, "Y_valid_scaled_ets.RData"), temp.space),
+                                   temp.space)
+Y_valid[["data"]][["glm1"]] <- get(load(paste0(path, "Y_valid_scaled_glm.RData"), temp.space), temp.space)
+Y_valid[["data"]][["glm2"]] <- get(load(paste0(path, "Y_validation_scaled_glm2.RData"), temp.space),
+                                   temp.space)
+Y_valid[["data"]][["glm3"]] <- get(load(paste0(path, "Y_validation_scaled_glm3.RData"), temp.space),
+                                   temp.space)
+rm(temp.space)
+
+Y_valid_list <- get(load(paste0(path, "Y_valid_glm1.RData")))
+Y_valid_sc_list <- get(load(paste0(path, "Y_valid_scaled_glm.RData")))
+Y_valid_scaled <- add_names2vali_Y(Y_valid_sc_list, Y_names, as.matrix(Y_obs_list$`2011`))
+Y_valid_unscaled <- add_names2vali_Y(Y_valid_list, Y_names, as.matrix(Y_obs_list$`2011`))
+cor_mat_scaled <- pearson(Y_valid_scaled, ranks = ranks, years.forecast = year2future, parallel = T, n.cores = 3)
+cor_mat_unscaled <- pearson(Y_valid_unscaled, ranks = ranks, years.forecast = year2future, parallel = T, n.cores = 3)
+plot_cv(cor_mat_scaled, year_split)
+plot_cv(cor_mat_unscaled, year_split)
+plot(1,1)
+```
+load(paste0(path, "Y_valid_scaled_glm1.RData"))
+Y_valid_list_full <- add_names2vali_Y(Y_valid_list, Y_names, as.matrix(Y_obs_list$`2011`))
+cor_mat_glm1 <- pearson(Y_valid_list_full, ranks, year2future, parallel = T, n.cores = 3)
+plot_cv(cor_mat_glm1)
+
+```{r}
+# add columns with names and ranks
+Y_valid[["data"]] <- lapply(Y_valid[["data"]], add_names2vali_Y, names = Y_names, Y.obs4ranks = as.matrix(Y_obs_list$`2011`)) 
+
+```
+
+
+### by (1) and (2) (year where data is split and number of years to which forecasts are made)
+
+```{r}
+year <- 2000:2010
+year2future <- 1:(length(year) - 1)
+cor_mat1 <- matrix(nrow = length(year), ncol = 10)
+colnames(cor_mat1) <- year2future
+rownames(cor_mat1) <- year
+ for(i in 1:length(year)){
+   for(j in 1:length(year2future)){
+     cor_mat1[i,j] <- cor(Y_valid_sc_list_full[Year_forecast - Year_split == year2future[j] & Year_split == year[i]]$est,  Y_valid_sc_list_full[Year_forecast - Year_split == year2future[j] & Year_split == year[i]]$obs)^2
+   }
+ }
+
+par(mfrow = c(3,4))
+ for(i in 1:nrow(cor_mat1)){
+   plot(year2future, cor_mat1[i,], type = "b", ylim = c(0, max(cor_mat1, na.rm = T)), main = rownames(cor_mat1)[i])
+ }
+```
+
+### by (2) and (3)
+```{r}
+ranks <- c(50, 100, 200, 7987)
+ cor_mat2 <- matrix(nrow = length(ranks), ncol = 10)
+ 
+  for(i in 1:length(ranks)){
+   for(j in 1:length(year2future)){
+     cor_mat2[i,j] <- cor(Y_valid_sc_list_full[Year_forecast - Year_split == year2future[j] & Rank < ranks[i]]$est,  Y_valid_sc_list_full[Year_forecast - Year_split == year2future[j]  & Rank < ranks[i]]$obs)^2
+   }
+ }
+ par(mfrow = c(2,2))
+ for(i in 1:nrow(cor_mat2)){
+   plot(year2future, cor_mat2[i,], type = "b", ylim = c(0, max(cor_mat2, na.rm = T)), main = ranks[i])
+ }
+```
+
+
+### by (1), (2) and (3)
+all in one: 
+```{r}
+ranks  <- c(50, 100, 200, 7987)
+year_split <- 2000:2010
+year2future <- 1:(length(year) - 1)
+
+# leaving time series with observation purely 0 in 
+cl <- makeCluster(3)
+clusterCall(cl, function() library(data.table))
+Y_valid[["cor.arrays"]] <- parLapply(cl, Y_valid$data, pearson, ranks = ranks, years.forecast = year2future)
+stopCluster(cl)
+
+# excluding observation of 0
+cl <- makeCluster(3)
+clusterCall(cl, function() library(data.table))
+Y_valid[["cor.arrays_w/o_zero"]] <- parLapply(cl, lapply(Y_valid$data, function(x) x[Rank != max(Rank)]), pearson, ranks = ranks, years.forecast = year2future)
+stopCluster(cl)
+
+plot_cv(Y_valid$cor.arrays$ets, year_split)
+plot_cv(Y_valid$cor.arrays$glm1, year_split)
+
+
+plot_cv(Y_valid$cor.arrays, year_split)
+
+plot_cv(Y_valid$`cor.arrays_w/o_zero`, year_split)
+
+ # excluding observations of 0 ?? (with dt[obs > 0]) ==> makes no difference
+```
+
+```{r}
+par(mfrow = c(1,1))
+plot(Y_valid_ets_full[Year_forecast - Year_split == 8 & Year_split == 2001 & Rank < 51]$est,  Y_valid_ets_full[Year_forecast - Year_split == 8  & Year_split == 2001 & Rank < 51]$obs, ylim = c(-4, 4), xlim = c(-4, 4))
+cor(Y_valid_ets_full[Year_forecast - Year_split == 8 & Year_split == 2001 & Rank < 51]$est,  Y_valid_ets_full[Year_forecast - Year_split == 8 & Year_split == 2001 & Rank < 51]$obs)^2
+lines(c(-4, 4), c(-4, 4))
+```
+
+
+
+
+
+

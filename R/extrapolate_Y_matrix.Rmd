@@ -56,6 +56,8 @@ setwd("~/Dokumente/Master/master_thesis/scripts/R/mid-results/")
 GDP_DEU_current <- read.csv("BIP_current.csv", header = T) # gdp from statistischen bundesamt
 NetExports <- read.csv("nettoexports.csv", dec = ",")[-(1:4),]
 GDP_DEU_without_netExport <- rev(GDP_DEU$Value - NetExports$Value)
+
+rm(files)
 ```
 inflat_DEU <- read.table("inflation_raw.txt", header = T)[-c(1:4, (22:24)),1:2]
 colnames(inflat_DEU) <- c("Year", "Inflationrate")

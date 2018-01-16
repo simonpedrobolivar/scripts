@@ -1,0 +1,53 @@
+---
+title: "load_pars_n_packs"
+author: "Simon Schulte"
+date: "13 Januar 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# load packages
+```{r}
+library(xlsx)
+library(data.table)
+library(devtools)
+install_github('simonpedrobolivar/masterthesis/MRIOtools')
+library(MRIOtools)
+library(parallel)
+library(RColorBrewer)
+library(gdata)
+library(mgcv)
+library(foreach)
+library(doParallel)
+library(forecast)
+library(pbapply)
+```
+
+
+# setting the constant parameters
+```{r parameters}
+colors <- brewer.pal(12, "Set3") # colors for plots
+n_ind <- 163 # number of industries
+n_countries <- 49 # number of countries (40 + 1 RoW)
+years_obs <- 1995:2011 # years for which IO table exists
+n_years_obs <- length(years_obs)
+years_est <- c(2020, 2030) # years to which forecast shall be made
+years <- c(years_obs, years_est)
+
+# Y matrix: 
+n_FDcat <- 4 # final demand sectors (household, non-gov, gov, capital formation)
+FD_names <- c("Households", "NPISH", "Government", "GFCF")
+
+# S matrix
+n_GHGs <- 4 # number of relevant GHGs (CO2, CH4, N2O, SF6)
+stressors_vec = read.xls("/home/simon/Dokumente/Master/master_thesis/Calculation/MRIO_Config.xlsx", sheet = 3, header = T, skip = 1)$stressor
+GHG_indices <- c(27 , 28  ,29 , 71  ,72 , 73  ,74 , 75  ,76 , 77  ,78 , 96  ,97 ,427 ,428 ,429 ,430 ,431 ,433 ,439 ,441, 442)
+GHG_names <- as.character(stressors_vec[GHG_indices])
+
+
+path4plots <- "/home/simon/Dokumente/Master/master_thesis/figures/"
+path2data <- "~/Dokumente/Master/master_thesis/data/EB3/Scenario_4/"
+```
